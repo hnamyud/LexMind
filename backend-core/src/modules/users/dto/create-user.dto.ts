@@ -35,8 +35,4 @@ export class RegisterUserDto {
     @IsNotEmpty({ message: 'Mật khẩu không được bỏ trống' })
     password: string;
 
-    @ApiProperty()
-    @IsOptional()
-    @IsNotEmpty({ message: 'Vai trò không được bỏ trống' })
-    role?: string;
 }

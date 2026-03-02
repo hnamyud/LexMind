@@ -247,9 +247,10 @@ class RAGService:
         await q.put({"type": "thought", "content": "🗂️ Đang tra cứu cơ sở dữ liệu đồ thị..."})
         records, context = await self.hybrid_query(state["legal_query"])
         if records:
-            sources = ", ".join([r["id"] for r in records])
+            sources_list = [r["id"] for r in records]
+            sources_str = ", ".join(sources_list)
             await q.put(
-                {"type": "thought", "content": f"✅ Tìm thấy {len(records)} đoạn luật liên quan: {sources}"}
+                {"type": "thought", "content": f"✅ Tìm thấy {len(records)} đoạn luật liên quan: {sources_str}"}
             )
         else:
             await q.put(
@@ -269,10 +270,26 @@ class RAGService:
                     ),
                 }
             )
+            await q.put({
+                "type": "metadata",
+                "content": {
+                    "sources": [],
+                    "reasoning_steps": 0
+                }
+            })
             return state
         await q.put({"type": "thought", "content": "🤔 Đang phân tích dữ liệu pháp lý và soạn thảo câu trả lời..."})
         async for chunk_text in self.synthesize_answer_stream(state["question"], state["context"]):
             await q.put({"type": "answer", "content": chunk_text})
+
+        sources_list = [r["id"] for r in state["records"]]
+        await q.put({
+            "type": "metadata",
+            "content": {
+                "sources": sources_list,
+                "reasoning_steps": 4
+            }
+        })
         return state
 
     def _build_graph(self) -> StateGraph:
@@ -290,7 +307,7 @@ class RAGService:
     # Pipeline streaming (LangGraph)
     # ------------------------------------------------------------------
 
-    async def ask_stream(self, question: str):
+    async def ask_stream(self, question: str, conversation_id: str | None = None):
         """
         Async generator yield labeled NDJSON chunks:
           {"type": "thought", "content": "..."}

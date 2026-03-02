@@ -13,6 +13,7 @@ router = APIRouter()
 
 class AskRequest(BaseModel):
     question: str
+    conversation_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +103,7 @@ async def ask_question_stream(request: Request, body: AskRequest):
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống.")
     svc = _get_service(request)
     return StreamingResponse(
-        svc.ask_stream(body.question),
+        svc.ask_stream(body.question, body.conversation_id),
         media_type="application/x-ndjson",
     )
 

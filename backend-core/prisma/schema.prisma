@@ -47,6 +47,7 @@ model Conversation {
 
 model Message {
   id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  parentId       String?      @map("parent_id") @db.Uuid
   conversationId String       @map("conversation_id") @db.Uuid
   sender         String
   content        String       @db.Text
