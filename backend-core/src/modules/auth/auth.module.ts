@@ -9,11 +9,13 @@ import { PassportModule } from '@nestjs/passport';
 import { LocalStrategy } from './passport/local.strategy';
 import { JwtStrategy } from './passport/jwt.strategy';
 import googleOauthConfig from 'src/config/google-oauth.config';
+import { RedisModule } from 'src/shared/cache/redis.module';
 
 @Module({
   imports: [
     UsersModule,
     PrismaModule,
+    RedisModule,
     PassportModule,
     ConfigModule.forFeature(googleOauthConfig),
     JwtModule.registerAsync({

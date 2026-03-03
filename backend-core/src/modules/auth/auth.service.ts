@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import ms, { StringValue } from 'ms';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -8,6 +8,8 @@ import { UserRole } from 'src/common/enum/role.enum';
 import { IUser } from 'src/common/interfaces/users.interface';
 import { RegisterUserDto } from 'src/modules/users/dto/create-user.dto';
 import { UsersService } from 'src/modules/users/users.service';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import Redis from 'ioredis';
 
 @Injectable()
 export class AuthService {
@@ -16,6 +18,7 @@ export class AuthService {
         private configService: ConfigService,
         private userService: UsersService,
         private prisma: PrismaService,
+        @Inject('REDIS_CLIENT') private redisClient: Redis
     ) { }
 
     async validateUser(email: string, pass: string): Promise<any> {
@@ -119,7 +122,7 @@ export class AuthService {
         };
     }
 
-    async logout(response: Response, user: IUser) {
+    async logout(user: IUser, response: Response) {
         try {
             // Remove refresh token from database
             await this.prisma.user.update({
@@ -179,5 +182,52 @@ export class AuthService {
             name: googleUser.name,
             email: googleUser.email,
         });
+    }
+
+    async verifyOtp(email: string, otp: string) {
+        const redisKey = `reset_otp:${email}`;
+        const attemptsKey = `reset_otp_attempts:${email}`;
+        const attempts = await this.redisClient.get(attemptsKey);
+
+        // Check number of attempts
+        if (attempts && parseInt(attempts) >= 5) {
+            await this.redisClient.del(redisKey); // Delete OTP from Redis
+            await this.redisClient.del(attemptsKey);
+            throw new BadRequestException('You have tried too many times. Please request a new OTP.');
+        }
+
+        const storedOtp = await this.redisClient.get(redisKey);
+        if (!storedOtp) {
+            throw new BadRequestException('Invalid OTP or OTP has expired!');
+        }
+        if (storedOtp !== otp) {
+            // Increase number of attempts
+            await this.redisClient.incr(attemptsKey);
+
+            // Set time to live for this key (example 5 minutes = equal to OTP time)
+            await this.redisClient.expire(attemptsKey, 300);
+            throw new BadRequestException('Invalid OTP!');
+        }
+
+        // If correct, delete the key count (so that the next time the user resets, they don't get stuck with the old limit)
+        await this.redisClient.del(attemptsKey);
+        return true;
+    }
+
+    async resetPassword(resetPasswordDto: ResetPasswordDto) {
+        // Kiểm tra OTP và limit thử
+        await this.verifyOtp(resetPasswordDto.email, resetPasswordDto.otp);
+
+        const redisKey = `reset_otp:${resetPasswordDto.email}`;
+
+        const user = await this.userService.findOneByEmail(resetPasswordDto.email);
+        if (!user) {
+            // Case hiếm: Có OTP trong Redis nhưng User lại bị xóa khỏi DB rồi
+            throw new BadRequestException('User not found.');
+        }
+        const hashPassword = await this.userService.getHashPassword(resetPasswordDto.newPassword);
+        await this.userService.updateUserPassword(resetPasswordDto.email, hashPassword);
+        // Xoá OTP sau khi đổi mật khẩu thành công
+        await this.redisClient.del(redisKey);
     }
 }

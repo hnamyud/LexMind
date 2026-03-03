@@ -134,4 +134,15 @@ export class UsersService {
             }
         });
     }
+
+    async updateUserPassword(email: string, newPassword: string) {
+        return await this.prisma.user.update({
+            where: {
+                email: email
+            },
+            data: {
+                password: newPassword
+            }
+        });
+    }
 }
