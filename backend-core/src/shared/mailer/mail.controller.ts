@@ -12,7 +12,7 @@ export class MailController {
     private readonly mailService: MailService,
   ) {}
 
-  @Post('reset-password')
+  @Post('/reset-password')
   @Public()
   @ApiBody({ type: SendResetPasswordDto })
   @ResponseMessage("Reset password code has sent!")

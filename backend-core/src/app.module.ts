@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -8,21 +8,36 @@ import { UsersModule } from './modules/users/users.module';
 import { MessagesModule } from './modules/messages/messages.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { HttpModule } from '@nestjs/axios';
+import { MailModule } from './shared/mailer/mail.module';
+import { RedisModule } from './shared/cache/redis.module';
+import { LoggerMiddleware } from './core/middleware/logger.middleware';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: '../.env', // Root .env dùng chung với ai-service
+    }),
     HttpModule.register({
       timeout: 60000, // AI có thể suy nghĩ lâu nên để timeout dài
       maxRedirects: 5,
     }),
     ConversationsModule,
+    MailModule,
     AuthModule,
     UsersModule,
     MessagesModule,
-    ChatModule
+    ChatModule,
+    RedisModule
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule { }
+export class AppModule {
+  // Configure middleware globally
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply(LoggerMiddleware)
+      .forRoutes('*');
+  }
+}

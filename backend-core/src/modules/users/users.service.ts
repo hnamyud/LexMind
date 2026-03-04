@@ -125,7 +125,7 @@ export class UsersService {
             throw new BadRequestException('Mật khẩu mới không được giống mật khẩu cũ');
         }
         const hashPassword = await this.getHashPassword(newPassword);
-        return await this.prisma.user.update({
+        await this.prisma.user.update({
             where: {
                 id: user.id
             },
@@ -133,6 +133,10 @@ export class UsersService {
                 password: hashPassword
             }
         });
+        return {
+            id: user.id,
+            email: user.email,
+        };
     }
 
     async updateUserPassword(email: string, newPassword: string) {

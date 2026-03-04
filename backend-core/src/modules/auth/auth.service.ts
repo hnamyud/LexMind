@@ -9,6 +9,7 @@ import { IUser } from 'src/common/interfaces/users.interface';
 import { RegisterUserDto } from 'src/modules/users/dto/create-user.dto';
 import { UsersService } from 'src/modules/users/users.service';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ChangePasswordDto } from 'src/modules/auth/dto/change-password.dto';
 import Redis from 'ioredis';
 
 @Injectable()
@@ -229,5 +230,24 @@ export class AuthService {
         await this.userService.updateUserPassword(resetPasswordDto.email, hashPassword);
         // Xoá OTP sau khi đổi mật khẩu thành công
         await this.redisClient.del(redisKey);
+    }
+
+    async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
+        return await this.userService.changePassword(userId, changePasswordDto.oldPassword, changePasswordDto.newPassword);
+    }
+
+    async getUserInfo(user: IUser) {
+        return await this.prisma.user.findUnique({
+            where: {
+                id: user.id
+            },
+            select: {
+                id: true,
+                fullName: true,
+                email: true,
+                role: true,
+                createdAt: true,
+            }
+        });
     }
 }

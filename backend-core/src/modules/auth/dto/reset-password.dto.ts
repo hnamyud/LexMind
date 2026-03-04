@@ -10,7 +10,7 @@ export class SendResetPasswordDto {
 
 export class VerifyOtpDto {
   @ApiProperty()
-  @IsEmail()
+  @IsEmail({}, { message: 'Email không đúng định dạng' })
   @IsNotEmpty()
   email: string;
 
@@ -23,7 +23,7 @@ export class VerifyOtpDto {
 
 export class ResetPasswordDto {
   @ApiProperty()
-  @IsEmail()
+  @IsEmail({}, { message: 'Email không đúng định dạng' })
   @IsNotEmpty()
   email: string;
 

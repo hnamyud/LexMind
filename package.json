@@ -1,0 +1,15 @@
+{
+    "name": "chatbot-law",
+    "version": "1.0.0",
+    "description": "Chatbot Luật Giao thông - Monorepo",
+    "private": true,
+    "scripts": {
+        "dev": "concurrently --kill-others-on-fail --prefix-colors \"blue,magenta\" --names \"NEST,FASTAPI\" \"npm run dev:nest\" \"npm run dev:ai\"",
+        "dev:nest": "cd backend-core && npm run dev",
+        "dev:ai": "cd ai-service && .venv\\Scripts\\python -m uvicorn main:app --host 127.0.0.1 --port 8001 --reload",
+        "install:all": "cd backend-core && npm install"
+    },
+    "devDependencies": {
+        "concurrently": "^9.1.2"
+    }
+}

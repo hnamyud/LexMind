@@ -1,7 +1,11 @@
 import os
-from dotenv import load_dotenv, find_dotenv
+from pathlib import Path
+from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env từ root monorepo (thư mục cha của ai-service)
+ROOT_DIR = Path(__file__).resolve().parents[3]  # ai-service/app/core/config.py -> root
+load_dotenv(dotenv_path=ROOT_DIR / ".env")
+
 
 class Settings:
     NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")

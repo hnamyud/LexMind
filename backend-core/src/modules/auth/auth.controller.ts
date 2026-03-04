@@ -2,13 +2,15 @@ import { BadRequestException, Body, Controller, Get, Post, Req, Res, UseGuards }
 import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { ConfigService } from '@nestjs/config';
-import { Public, ResponseMessage } from 'src/core/decorators/customize.decorator';
+import { GetUser, Public, ResponseMessage } from 'src/core/decorators/customize.decorator';
 import { LocalAuthGuard } from 'src/common/guards/local-auth.guard';
 import { ApiBearerAuth, ApiBody, ApiProperty } from '@nestjs/swagger';
 import { LoginDto } from './dto/login.dto';
 import { RegisterUserDto } from '../users/dto/create-user.dto';
 import { GoogleAuthGuard } from 'src/common/guards/google-auth.guard';
 import { ResetPasswordDto, VerifyOtpDto } from './dto/reset-password.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import type { IUser } from 'src/common/interfaces/users.interface';
 
 @Controller('auth')
 export class AuthController {
@@ -82,9 +84,17 @@ export class AuthController {
     response.redirect(this.configService.get('BROWSER_REDIRECT_URI') + request.accessToken);
   }
 
+  @Get('/profile')
+  @ApiBearerAuth('access-token')
+  @ResponseMessage("Get user profile")
+  async getProfile(@GetUser() user: IUser) {
+    return await this.authService.getUserInfo(user);
+  }
+
   @Post('/verify-otp')
   @Public()
   @ResponseMessage("Verify OTP")
+  @ApiBody({ type: VerifyOtpDto })
   async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
     const isValid = await this.authService.verifyOtp(verifyOtpDto.email, verifyOtpDto.otp);
     if (!isValid) throw new BadRequestException('Invalid OTP or OTP has expired!');
@@ -94,9 +104,24 @@ export class AuthController {
   @Post('/reset-password')
   @Public()
   @ResponseMessage("Reset password")
+  @ApiBody({ type: ResetPasswordDto })
   async handleResetPassword(
     @Body() resetPasswordDto: ResetPasswordDto
   ) {
     return await this.authService.resetPassword(resetPasswordDto);
+  }
+
+  @Post('/change-password')
+  @ApiBearerAuth('access-token')
+  @ResponseMessage("Change password")
+  @ApiBody({ type: ChangePasswordDto })
+  async handleChangePassword(
+    @GetUser() user: IUser,
+    @Body() changePasswordDto: ChangePasswordDto
+  ) {
+    if (changePasswordDto.newPassword !== changePasswordDto.confirmPassword) {
+      throw new BadRequestException('Mật khẩu xác nhận không khớp');
+    }
+    return await this.authService.changePassword(user.id, changePasswordDto);
   }
 }
