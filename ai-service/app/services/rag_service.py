@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
+from typing import Optional, List
 
 import neo4j
 import yaml
@@ -8,7 +9,12 @@ from fastapi import HTTPException
 from neo4j import AsyncGraphDatabase, exceptions
 from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+from app.tools.graph_retrieval import make_graph_retrieval_tool
 
 from app.core.config import settings
 from app.core.state import RAGState
@@ -32,7 +38,7 @@ def _load_prompt(filename: str) -> str:
 # ---------------------------------------------------------------------------
 
 class RAGService:
-    def __init__(self):
+    def __init__(self, checkpointer: Optional[AsyncPostgresSaver] = None):
         self._uri = settings.NEO4J_URI
         self._user = settings.NEO4J_USER
         self._password = settings.NEO4J_PASSWORD
@@ -42,6 +48,13 @@ class RAGService:
         self._driver = None
         self._llm = None
         self._embed_model = None
+
+        # AsyncPostgresSaver: lưu/tải checkpoint theo thread_id (conversation_id)
+        # None → graph chạy stateless (không lưu memory)
+        self._checkpointer: Optional[AsyncPostgresSaver] = checkpointer
+
+        # Graph được compile 1 lần và tái sử dụng cho mọi request
+        self._graph = None
 
         # Nạp prompt từ YAML một lần khi khởi tạo service
         self._prompt_rewrite: str = _load_prompt("rewrite_legal_query.yaml")
@@ -53,6 +66,8 @@ class RAGService:
         await self._connect_neo4j()
         self._connect_llm()
         await loop.run_in_executor(None, self._load_embed_model)
+        # Compile graph sau khi có đủ checkpointer
+        self._graph = self._build_graph()
 
     # ------------------------------------------------------------------
     # Kết nối
@@ -179,7 +194,26 @@ class RAGService:
     # ------------------------------------------------------------------
 
     def _build_synthesis_prompt(self, question: str, context: str) -> str:
-        return self._prompt_synthesis.format(context=context, question=question)
+    def _build_synthesis_prompt(self, question: str, context: str, history: list | None = None) -> str:
+        # Xây dựng phần lịch sử hội thoại nếu có
+        history_text = ""
+        if history:
+            lines = []
+            for msg in history:
+                role = "Người dùng" if isinstance(msg, HumanMessage) else "Trợ lý"
+                lines.append(f"{role}: {msg.content}")
+            history_text = "\n".join(lines)
+
+        base_prompt = self._prompt_synthesis.format(context=context, question=question)
+
+        if not history_text:
+            return base_prompt
+
+        # Chèn lịch sử trước phần trả lời để LLM hiểu ngữ cảnh
+        return (
+            f"Lịch sử hội thoại trước đó:\n{history_text}\n\n"
+            f"{base_prompt}"
+        )
 
     async def synthesize_answer(self, question: str, context: str) -> str:
         if not self._llm:
@@ -192,11 +226,14 @@ class RAGService:
             logging.error(f"[SYNTHESIZE] Lỗi tổng hợp câu trả lời: {e}")
             raise HTTPException(status_code=500, detail="Lỗi khi tổng hợp câu trả lời.")
 
-    async def synthesize_answer_stream(self, question: str, context: str):
-        """Async generator yield từng text chunk từ Gemini streaming API."""
+    async def synthesize_answer_stream(self, question: str, context: str, history: list | None = None):
+        """Async generator yield từng text chunk từ Gemini streaming API.
+        
+        history: danh sách HumanMessage/AIMessage từ checkpoint (lịch sử hội thoại cũ).
+        """
         if not self._llm:
             raise HTTPException(status_code=503, detail="Dịch vụ LLM không khả dụng.")
-        full_prompt = self._build_synthesis_prompt(question, context)
+        full_prompt = self._build_synthesis_prompt(question, context, history=history)
         try:
             response = await self._llm.generate_content_async(full_prompt, stream=True)
             async for chunk in response:
@@ -261,38 +298,54 @@ class RAGService:
     async def _node_synthesize(self, state: RAGState) -> RAGState:
         q: asyncio.Queue = state["queue"]
         if not state["records"]:
-            await q.put(
-                {
-                    "type": "answer",
-                    "content": (
-                        "Xin lỗi, tôi không tìm thấy thông tin liên quan trong cơ sở dữ liệu. "
-                        "Bạn có thể thử hỏi câu khác."
-                    ),
-                }
+            no_data_msg = (
+                "Xin lỗi, tôi không tìm thấy thông tin liên quan trong cơ sở dữ liệu. "
+                "Bạn có thể thử hỏi câu khác."
             )
+            await q.put({"type": "answer", "content": no_data_msg})
             await q.put({
                 "type": "metadata",
-                "content": {
-                    "sources": [],
-                    "reasoning_steps": 0
-                }
+                "content": {"sources": [], "reasoning_steps": 0}
             })
-            return state
+            # Lưu AIMessage vào state để checkpoint ghi nhận
+            return {**state, "messages": [AIMessage(content=no_data_msg)]}
+
         await q.put({"type": "thought", "content": "🤔 Đang phân tích dữ liệu pháp lý và soạn thảo câu trả lời..."})
-        async for chunk_text in self.synthesize_answer_stream(state["question"], state["context"]):
+
+        # Thu thập toàn bộ nội dung để lưu vào AIMessage
+        full_answer_chunks = []
+        async for chunk_text in self.synthesize_answer_stream(
+            state["question"],
+            state["context"],
+            history=state.get("messages", []),  # truyền lịch sử hội thoại
+        ):
             await q.put({"type": "answer", "content": chunk_text})
+            full_answer_chunks.append(chunk_text)
+
+        full_answer = "".join(full_answer_chunks)
 
         sources_list = [r["id"] for r in state["records"]]
         await q.put({
             "type": "metadata",
-            "content": {
-                "sources": sources_list,
-                "reasoning_steps": 4
-            }
+            "content": {"sources": sources_list, "reasoning_steps": 4}
         })
-        return state
 
-    def _build_graph(self) -> StateGraph:
+        # Lưu câu trả lời vào messages để checkpoint ghi nhận
+        # → Lần sau load checkpoint sẽ thấy cả câu hỏi lẫn câu trả lời này
+        return {**state, "messages": [AIMessage(content=full_answer)]}
+
+    def _build_graph(self):
+        """
+        Compile LangGraph một lần duy nhất khi khởi động.
+
+        Nếu có checkpointer:
+          - LangGraph tự động load state cũ từ PostgreSQL theo thread_id
+            trước mỗi invoke, và tự lưu lại sau khi hoàn thành.
+          - Hoàn toàn async → không block event-loop.
+
+        Nếu không có checkpointer:
+          - Graph chạy stateless như cũ.
+        """
         graph = StateGraph(RAGState)
         graph.add_node("rewrite",    self._node_rewrite)
         graph.add_node("search",     self._node_search)
@@ -301,7 +354,13 @@ class RAGService:
         graph.add_edge("rewrite",    "search")
         graph.add_edge("search",     "synthesize")
         graph.add_edge("synthesize", END)
-        return graph.compile()
+
+        compiled = graph.compile(checkpointer=self._checkpointer)
+        if self._checkpointer:
+            logging.info("✅ LangGraph compiled với AsyncPostgresSaver (có memory).")
+        else:
+            logging.warning("⚠️  LangGraph compiled KHÔNG có checkpointer (stateless).")
+        return compiled
 
     # ------------------------------------------------------------------
     # Pipeline streaming (LangGraph)
@@ -312,26 +371,48 @@ class RAGService:
         Async generator yield labeled NDJSON chunks:
           {"type": "thought", "content": "..."}
           {"type": "answer",  "content": "..."}
+          {"type": "metadata", "content": {...}}
           {"type": "done"}
+
+        conversation_id được dùng làm thread_id trong LangGraph config.
+        LangGraph sẽ dùng thread_id để:
+          1. Load checkpoint (lịch sử hội thoại) từ PostgreSQL trước khi chạy.
+          2. Lưu checkpoint mới sau khi graph hoàn thành.
+        Vì AsyncPostgresSaver là async, bước này không block event-loop.
         """
         import json
 
         queue: asyncio.Queue = asyncio.Queue()
+
+        # ── Khởi tạo state ban đầu ────────────────────────────────────────────
         initial_state: RAGState = {
             "question":    question,
             "legal_query": "",
             "records":     [],
             "context":     "",
             "queue":       queue,
+            # Thêm câu hỏi hiện tại vào messages để lưu vào memory
+            "messages":    [HumanMessage(content=question)],
         }
-        graph = self._build_graph()
+
+        # ── LangGraph config: thread_id xác định "luồng" hội thoại ───────────
+        # Nếu không có conversation_id → dùng "default" (vẫn dùng checkpointer,
+        # nhưng tất cả request không có ID sẽ dùng chung 1 checkpoint)
+        thread_id = conversation_id or "default"
+        graph_config = {
+            "configurable": {
+                "thread_id": thread_id,
+            }
+        }
+
+        graph = self._graph  # dùng graph đã compile sẵn (không build lại mỗi request)
 
         async def run_graph():
             try:
-                async for _ in graph.astream(initial_state):
+                async for _ in graph.astream(initial_state, config=graph_config):
                     pass
             except Exception as e:
-                logging.error(f"[LANGGRAPH] Lỗi: {e}")
+                logging.error(f"[LANGGRAPH] thread_id={thread_id} | Lỗi: {e}")
                 await queue.put({"type": "thought", "content": f"❌ Lỗi trong quá trình xử lý: {e}"})
             finally:
                 await queue.put(None)  # sentinel
@@ -344,6 +425,32 @@ class RAGService:
                 yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
                 break
             yield json.dumps(item, ensure_ascii=False) + "\n"
+
+    # ------------------------------------------------------------------
+    # Tools (dùng cho agentic flow)
+    # ------------------------------------------------------------------
+
+    def get_tools(self) -> List[BaseTool]:
+        """
+        Trả về danh sách tất cả các LangChain Tool của service này.
+
+        Dùng để bind vào agent trong agentic flow:
+
+            tools = rag_service.get_tools()
+            agent = create_react_agent(llm, tools=tools, checkpointer=checkpointer)
+
+        Returns
+        -------
+        List[BaseTool]
+            - GraphRetrievalTool: tra cứu đồ thị tri thức Neo4j
+        """
+        return [
+            make_graph_retrieval_tool(
+                driver=self._driver,
+                embed_model=self._embed_model,
+                top_k=5,
+            )
+        ]
 
     # ------------------------------------------------------------------
     # Cleanup

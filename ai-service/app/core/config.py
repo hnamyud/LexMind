@@ -14,5 +14,12 @@ class Settings:
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID", "keepitreal/vietnamese-sbert")
 
+    # PostgreSQL dùng cho LangGraph AsyncPostgresSaver
+    # Format: postgresql+psycopg://user:password@host:port/dbname
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/chatbot_law",
+    )
+
 
 settings = Settings()

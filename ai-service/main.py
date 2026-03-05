@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.core.checkpoint import build_checkpointer, close_checkpointer
 from app.services.rag_service import RAGService
 
 # ---------------------------------------------------------------------------
@@ -17,18 +18,37 @@ logging.basicConfig(
 
 
 # ---------------------------------------------------------------------------
-# Lifespan: khởi tạo / huỷ RAGService
+# Lifespan: thứ tự khởi tạo quan trọng
+#   1. Tạo AsyncPostgresSaver (mở PostgreSQL pool, setup bảng checkpoint)
+#   2. Tạo RAGService với checkpointer → initialize (Neo4j, Gemini, embed model)
+#   3. Compile LangGraph với checkpointer bên trong initialize()
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.info("Starting up RAG service...")
-    svc = RAGService()
-    await svc.initialize()
+    # ── STARTUP ────────────────────────────────────────────────────────────
+    logging.info("🚀 Khởi động ứng dụng...")
+
+    # Bước 1: Khởi tạo PostgreSQL checkpointer (async, không block)
+    logging.info("⏳ Đang khởi tạo AsyncPostgresSaver...")
+    checkpointer = await build_checkpointer()
+
+    # Bước 2: Tạo RAGService, truyền checkpointer vào
+    logging.info("⏳ Đang khởi tạo RAG service...")
+    svc = RAGService(checkpointer=checkpointer)
+    await svc.initialize()  # Bên trong sẽ compile graph với checkpointer
+
+    # Lưu vào app.state để các route có thể truy cập
     app.state.rag_service = svc
-    logging.info("✅ RAG service đã sẵn sàng!")
-    yield
-    logging.info("Shutting down...")
-    await svc.close()
+    app.state.checkpointer = checkpointer
+
+    logging.info("✅ Toàn bộ service đã sẵn sàng!")
+
+    yield  # ← Ứng dụng đang chạy
+
+    # ── SHUTDOWN ───────────────────────────────────────────────────────────
+    logging.info("🛑 Đang tắt ứng dụng...")
+    await svc.close()                          # Đóng Neo4j connection
+    await close_checkpointer(checkpointer)     # Đóng PostgreSQL pool
 
 
 # ---------------------------------------------------------------------------
@@ -59,4 +79,3 @@ app.include_router(router)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
-
