@@ -77,11 +77,12 @@ class GraphRetrievalTool(BaseTool):
     # ── Metadata bắt buộc của LangChain Tool ──────────────────────────────
     name: str = "search_legal_graph"
     description: str = (
-        "Tra cứu cơ sở dữ liệu đồ thị tri thức pháp lý Việt Nam (Nghị định 168/2024/NĐ-CP). "
-        "Dùng khi cần tìm thông tin về: mức phạt vi phạm giao thông, điều kiện tước giấy phép, "
-        "quy định về nồng độ cồn, tốc độ, tải trọng, v.v. "
-        "Input: câu hỏi hoặc từ khóa pháp lý. "
-        "Output: các đoạn luật liên quan nhất."
+        "CÔNG CỤ ƯU TIÊN SỐ 1. LUÔN SỬ DỤNG CÔNG CỤ NÀY ĐẦU TIÊN để tra cứu "
+        "cơ sở dữ liệu đồ thị tri thức pháp lý Việt Nam (Đặc biệt: Nghị định 168/2024/NĐ-CP). "
+        "Dùng để tìm kiếm toàn bộ thông tin chuẩn xác về: mức phạt vi phạm giao thông, "
+        "điều kiện tước giấy phép, quy định về nồng độ cồn, tốc độ, tải trọng, v.v. "
+        "Input: câu hỏi hoặc cụm từ khóa pháp lý cốt lõi. "
+        "Output: các đoạn luật liên quan trực tiếp sẵn sàng để trích dẫn."
     )
     args_schema: type[BaseModel] = GraphRetrievalInput
     return_direct: bool = False  # False = agent tiếp tục xử lý output

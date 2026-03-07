@@ -73,30 +73,14 @@ async def debug_info(request: Request):
 # RAG endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/ask", tags=["RAG"])
-async def ask_question(request: Request, body: AskRequest):
-    """
-    Pipeline RAG chính (non-streaming):
-    1. Query Transformation  2. Embedding  3. Hybrid Neo4j Search  4. Answer Synthesis
-    """
-    if not body.question.strip():
-        raise HTTPException(status_code=400, detail="Câu hỏi không được để trống.")
-    svc = _get_service(request)
-    try:
-        return await svc.ask(body.question)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Lỗi tại /ask: {e}")
-        raise HTTPException(status_code=500, detail="Đã có lỗi xảy ra ở phía server.")
-
-
 @router.post("/ask/stream", tags=["RAG"])
 async def ask_question_stream(request: Request, body: AskRequest):
     """
     Pipeline RAG với StreamingResponse (NDJSON):
-    - `{"type": "thought", "content": "..."}`: trạng thái từng bước
-    - `{"type": "answer",  "content": "..."}`: nội dung trả lời (nhiều chunk)
+    - `{"type": "thinking", "content": "..."}`: suy nghĩ nội bộ của LLM (reasoning)
+    - `{"type": "thought",  "content": "..."}`: trạng thái tool (đang tra cứu...)
+    - `{"type": "answer",   "content": "..."}`: nội dung trả lời (nhiều chunk)
+    - `{"type": "metadata", "content": {...}}`: metadata bổ sung
     - `{"type": "done"}`: kết thúc
     """
     if not body.question.strip():
@@ -106,29 +90,3 @@ async def ask_question_stream(request: Request, body: AskRequest):
         svc.ask_stream(body.question, body.conversation_id),
         media_type="application/x-ndjson",
     )
-
-
-# ---------------------------------------------------------------------------
-# Debug / Test endpoints
-# ---------------------------------------------------------------------------
-
-@router.post("/test/rewrite", tags=["Debug"])
-async def test_rewrite(request: Request, body: AskRequest):
-    """Test query transformation: xem Gemini rewrite câu hỏi thành gì."""
-    svc = _get_service(request)
-    rewritten = await svc.rewrite_legal_query(body.question)
-    return {"original": body.question, "rewritten": rewritten}
-
-
-@router.post("/test/search", tags=["Debug"])
-async def test_search(request: Request, body: AskRequest):
-    """Test vector search: xem Neo4j trả về node nào (không sinh câu trả lời)."""
-    svc = _get_service(request)
-    legal_query = await svc.rewrite_legal_query(body.question)
-    records, _ = await svc.hybrid_query(legal_query)
-    return {
-        "original": body.question,
-        "rewritten_query": legal_query,
-        "records_found": len(records),
-        "records": records,
-    }

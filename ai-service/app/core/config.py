@@ -12,6 +12,8 @@ class Settings:
     NEO4J_USER: str = os.getenv("NEO4J_USER", "neo4j")
     NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "")
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
+    FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
     EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID", "keepitreal/vietnamese-sbert")
 
     # PostgreSQL dùng cho LangGraph AsyncPostgresSaver

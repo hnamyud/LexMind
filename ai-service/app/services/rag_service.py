@@ -1,41 +1,86 @@
 import asyncio
+import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional, List
 
-import neo4j
 import yaml
 from fastapi import HTTPException
 from neo4j import AsyncGraphDatabase, exceptions
+import neo4j
 from sentence_transformers import SentenceTransformer
-import google.generativeai as genai
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, AIMessageChunk
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.tools.graph_retrieval import make_graph_retrieval_tool
+from app.tools.web_search import make_web_search_tool
 
 from app.core.config import settings
 from app.core.state import RAGState
 
-# ---------------------------------------------------------------------------
-# Helpers: load YAML prompts
-# ---------------------------------------------------------------------------
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
+# ---------------------------------------------------------------------------
+# Fallback detection: các mẫu cho thấy agent thiếu thông tin
+# ---------------------------------------------------------------------------
+_MISSING_INFO_PATTERNS = [
+    "không tìm thấy",
+    "không có thông tin",
+    "không có trong",
+    "ngoài phạm vi",
+    "không đủ thông tin",
+    "chưa có dữ liệu",
+    "thiếu thông tin",
+    "không rõ",
+    "chưa được cập nhật",
+    "không nằm trong",
+]
+
+_FALLBACK_MARKER = "[FALLBACK_WEB_SEARCH]"
+
+
+def _extract_ai_text(msg: AIMessage) -> str:
+    """Trích text thuần từ AIMessage (xử lý cả str lẫn list thinking chunks)."""
+    content = msg.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return " ".join(parts)
+    return str(content)
+
+
+def _detect_missing_info(messages: list) -> bool:
+    """Kiểm tra AIMessage cuối cùng có dấu hiệu thiếu thông tin hay không."""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            text = _extract_ai_text(msg).lower()
+            return any(p in text for p in _MISSING_INFO_PATTERNS)
+    return False
+
+
+def _fallback_already_done(messages: list) -> bool:
+    """Kiểm tra fallback search đã chạy chưa (tránh vòng lặp vô hạn)."""
+    return any(
+        isinstance(m, SystemMessage) and _FALLBACK_MARKER in (m.content if isinstance(m.content, str) else str(m.content))
+        for m in messages
+    )
 
 def _load_prompt(filename: str) -> str:
-    """Đọc trường `template` từ file YAML trong thư mục prompts/."""
     path = _PROMPTS_DIR / filename
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data["template"]
-
-
-# ---------------------------------------------------------------------------
-# RAGService
-# ---------------------------------------------------------------------------
 
 class RAGService:
     def __init__(self, checkpointer: Optional[AsyncPostgresSaver] = None):
@@ -43,40 +88,36 @@ class RAGService:
         self._user = settings.NEO4J_USER
         self._password = settings.NEO4J_PASSWORD
         self._api_key = settings.GOOGLE_API_KEY
+        self._api_key_serper = settings.SERPER_API_KEY
+        self._api_key_firecrawl = settings.FIRECRAWL_API_KEY
         self._embed_model_id = settings.EMBED_MODEL_ID
 
         self._driver = None
         self._llm = None
         self._embed_model = None
 
-        # AsyncPostgresSaver: lưu/tải checkpoint theo thread_id (conversation_id)
-        # None → graph chạy stateless (không lưu memory)
         self._checkpointer: Optional[AsyncPostgresSaver] = checkpointer
-
-        # Graph được compile 1 lần và tái sử dụng cho mọi request
         self._graph = None
-
-        # Nạp prompt từ YAML một lần khi khởi tạo service
-        self._prompt_rewrite: str = _load_prompt("rewrite_legal_query.yaml")
-        self._prompt_synthesis: str = _load_prompt("synthesis.yaml")
+        self._tools: Optional[List[BaseTool]] = None
+        self._system_prompt: str = _load_prompt("synthesis.yaml")
 
     async def initialize(self):
-        """Khởi tạo tất cả kết nối và load model — gọi 1 lần trong lifespan startup."""
         loop = asyncio.get_running_loop()
         await self._connect_neo4j()
         self._connect_llm()
         await loop.run_in_executor(None, self._load_embed_model)
-        # Compile graph sau khi có đủ checkpointer
+        self._tools = self._create_tools()
         self._graph = self._build_graph()
-
-    # ------------------------------------------------------------------
-    # Kết nối
-    # ------------------------------------------------------------------
 
     async def _connect_neo4j(self):
         try:
             self._driver = AsyncGraphDatabase.driver(
-                self._uri, auth=(self._user, self._password)
+                self._uri,
+                auth=(self._user, self._password),
+                max_connection_pool_size=10,
+                connection_acquisition_timeout=30,
+                max_connection_lifetime=600,     # tái tạo connection mỗi 10 phút
+                keep_alive=True,                 # gửi ping giữ connection sống
             )
             await self._driver.verify_connectivity()
             logging.info("✅ Kết nối Neo4j thành công!")
@@ -92,9 +133,14 @@ class RAGService:
             logging.error("❌ Thiếu GOOGLE_API_KEY")
             return
         try:
-            genai.configure(api_key=self._api_key)
-            self._llm = genai.GenerativeModel("gemini-2.5-flash")
-            logging.info("✅ Kết nối Gemini API thành công!")
+            self._llm = ChatGoogleGenerativeAI(
+                model="gemini-2.5-flash",
+                google_api_key=self._api_key,
+                temperature=0,
+                include_thoughts=True,
+                thinking_budget=8192,
+            )
+            logging.info("✅ Kết nối Gemini API thành công! (ChatGoogleGenerativeAI)")
         except Exception as e:
             logging.error(f"❌ Lỗi cấu hình Gemini API: {e}")
 
@@ -111,293 +157,189 @@ class RAGService:
             self._embed_model = None
 
     # ------------------------------------------------------------------
-    # Bước 0: Query Transformation
+    # LangGraph Nodes & Graph
     # ------------------------------------------------------------------
 
-    async def rewrite_legal_query(self, user_query: str) -> str:
-        """Chuyển câu hỏi dân dã sang thuật ngữ pháp lý."""
-        if not self._llm:
-            raise HTTPException(status_code=503, detail="Dịch vụ LLM không khả dụng.")
+    async def _node_agent(self, state: RAGState) -> dict:
+        messages = list(state.get("messages", []))
 
-        prompt = self._prompt_rewrite.format(user_query=user_query)
+        # Thêm System Prompt (Chỉ thêm nếu chưa có)
+        if not any(isinstance(m, SystemMessage) for m in messages):
+            sys_msg = SystemMessage(content=self._system_prompt)
+            messages = [sys_msg] + messages
+
+        llm_with_tools = self._llm.bind_tools(self._tools)
+
         try:
-            response = await self._llm.generate_content_async(prompt)
-            rewritten = response.text.strip()
-            logging.info(f"[QUERY REWRITE] '{user_query}' -> '{rewritten}'")
-            return rewritten
+            response = await llm_with_tools.ainvoke(messages)
+            return {"messages": [response]}
         except Exception as e:
-            logging.warning(f"[QUERY REWRITE] Lỗi rewrite, dùng câu gốc: {e}")
-            return user_query
+            logging.error(f"[AGENT] Lỗi: {e}")
+            err_msg = AIMessage(content=f"Xin lỗi, đã xảy ra lỗi khi xử lý câu hỏi: {e}")
+            return {"messages": [err_msg]}
 
     # ------------------------------------------------------------------
-    # Bước 1: Tạo embedding
+    # Fallback Search Node
     # ------------------------------------------------------------------
 
-    def get_embedding(self, text: str) -> list:
-        if not self._embed_model:
-            raise HTTPException(status_code=503, detail="Embedding model không khả dụng.")
-        return self._embed_model.encode(text).tolist()
-
-    # ------------------------------------------------------------------
-    # Bước 2: Vector Search + 2-hop Traversal
-    # ------------------------------------------------------------------
-
-    async def hybrid_query(self, legal_query: str) -> tuple[list, str]:
-        """Truy vấn Neo4j bằng vector search + graph traversal."""
-        if not self._driver:
-            raise HTTPException(status_code=503, detail="Không thể kết nối Neo4j.")
-
-        loop = asyncio.get_running_loop()
-        question_vector = await loop.run_in_executor(None, self.get_embedding, legal_query)
-
-        cypher_query = """
-        CALL db.index.vector.queryNodes('legal_vector_index', 5, $vector)
-        YIELD node, score
-        OPTIONAL MATCH (node)-[*1..2]-(related:Entity)
-        WHERE related.label IN ['Article', 'Action', 'Consequence', 'Subject']
-        RETURN
-            node.id         AS id,
-            node.text       AS text,
-            node.raw_text   AS raw_content,
-            collect(DISTINCT related.raw_text) AS context_list,
-            score
-        ORDER BY score DESC
+    async def _node_fallback_search(self, state: RAGState) -> dict:
         """
+        Được kích hoạt khi agent trả lời nhưng thiếu thông tin.
+        Tự động gọi web_search để bổ sung, rồi trả kết quả dưới dạng
+        SystemMessage có marker để agent tổng hợp lại.
+        """
+        messages = state.get("messages", [])
+
+        # Lấy câu hỏi gốc từ HumanMessage đầu tiên
+        question = ""
+        for msg in messages:
+            if isinstance(msg, HumanMessage):
+                question = msg.content if isinstance(msg.content, str) else str(msg.content)
+                break
+
+        if not question:
+            marker = SystemMessage(content=f"{_FALLBACK_MARKER}\nKhông xác định được câu hỏi gốc.")
+            return {"messages": [marker]}
+
+        # Tìm web_search tool
+        web_tool = next((t for t in self._tools if t.name == "web_search"), None)
+        if not web_tool:
+            logging.warning("[FALLBACK] web_search tool không khả dụng — bỏ qua fallback.")
+            marker = SystemMessage(content=f"{_FALLBACK_MARKER}\nWeb search không khả dụng.")
+            return {"messages": [marker]}
+
+        logging.info(f"[FALLBACK] Đang tìm kiếm bổ sung cho: {question[:80]}")
 
         try:
-            async with self._driver.session(
-                database="neo4j",
-                default_access_mode=neo4j.WRITE_ACCESS,
-            ) as session:
-                result = await session.run(cypher_query, vector=question_vector)
-                records = await result.data()
-
-                logging.info(f"[NEO4J SEARCH] Số node tìm được: {len(records)}")
-                for i, r in enumerate(records):
-                    logging.info(
-                        f"  #{i+1} id={r['id']} score={r['score']:.4f} text={r['text']}"
-                    )
-
-                context_blocks = []
-                for r in records:
-                    block = f"--- Nguồn {r['id']} ---\n{r['raw_content']}\n"
-                    block += "\n".join([str(c) for c in r["context_list"] if c])
-                    context_blocks.append(block)
-
-                return records, "\n\n".join(context_blocks)
+            result = await web_tool._arun(query=question)
         except Exception as e:
-            logging.error(f"[NEO4J SEARCH] Lỗi truy vấn: {e}")
-            raise HTTPException(status_code=500, detail=f"Lỗi truy vấn Neo4j: {e}")
+            logging.error(f"[FALLBACK] Lỗi web search: {e}")
+            result = f"Lỗi khi tìm kiếm bổ sung: {e}"
 
-    # ------------------------------------------------------------------
-    # Bước 3: Tổng hợp câu trả lời
-    # ------------------------------------------------------------------
-
-    def _build_synthesis_prompt(self, question: str, context: str) -> str:
-    def _build_synthesis_prompt(self, question: str, context: str, history: list | None = None) -> str:
-        # Xây dựng phần lịch sử hội thoại nếu có
-        history_text = ""
-        if history:
-            lines = []
-            for msg in history:
-                role = "Người dùng" if isinstance(msg, HumanMessage) else "Trợ lý"
-                lines.append(f"{role}: {msg.content}")
-            history_text = "\n".join(lines)
-
-        base_prompt = self._prompt_synthesis.format(context=context, question=question)
-
-        if not history_text:
-            return base_prompt
-
-        # Chèn lịch sử trước phần trả lời để LLM hiểu ngữ cảnh
-        return (
-            f"Lịch sử hội thoại trước đó:\n{history_text}\n\n"
-            f"{base_prompt}"
+        fallback_msg = SystemMessage(
+            content=(
+                f"{_FALLBACK_MARKER}\n"
+                f"Thông tin bổ sung từ tìm kiếm web (fallback tự động):\n\n"
+                f"{result}\n\n"
+                f"Hãy kết hợp thông tin bổ sung ở trên với dữ liệu đã có từ Knowledge Graph "
+                f"để trả lời ĐẦY ĐỦ câu hỏi của người dùng. "
+                f"Nếu có mâu thuẫn, ưu tiên nguồn chính thức (vanban.chinhphu.vn, moj.gov.vn)."
+            )
         )
+        return {"messages": [fallback_msg]}
 
-    async def synthesize_answer(self, question: str, context: str) -> str:
-        if not self._llm:
-            raise HTTPException(status_code=503, detail="Dịch vụ LLM không khả dụng.")
-        full_prompt = self._build_synthesis_prompt(question, context)
-        try:
-            response = await self._llm.generate_content_async(full_prompt)
-            return response.text
-        except Exception as e:
-            logging.error(f"[SYNTHESIZE] Lỗi tổng hợp câu trả lời: {e}")
-            raise HTTPException(status_code=500, detail="Lỗi khi tổng hợp câu trả lời.")
+    # ------------------------------------------------------------------
+    # Routing logic
+    # ------------------------------------------------------------------
 
-    async def synthesize_answer_stream(self, question: str, context: str, history: list | None = None):
-        """Async generator yield từng text chunk từ Gemini streaming API.
-        
-        history: danh sách HumanMessage/AIMessage từ checkpoint (lịch sử hội thoại cũ).
+    @staticmethod
+    def _route_after_agent(state: RAGState) -> str:
         """
-        if not self._llm:
-            raise HTTPException(status_code=503, detail="Dịch vụ LLM không khả dụng.")
-        full_prompt = self._build_synthesis_prompt(question, context, history=history)
-        try:
-            response = await self._llm.generate_content_async(full_prompt, stream=True)
-            async for chunk in response:
-                if chunk.text:
-                    yield chunk.text
-        except Exception as e:
-            logging.error(f"[SYNTHESIZE STREAM] Lỗi: {e}")
-            raise
+        Quyết định bước tiếp theo sau agent node:
+          - Có tool_calls        → "tools"  (ReAct loop)
+          - Thiếu thông tin      → "fallback_search"  (bổ sung từ web)
+          - Đủ thông tin / done  → END
+        """
+        messages = state.get("messages", [])
+        last = messages[-1] if messages else None
+
+        # Agent muốn gọi tool → chuyển sang tool node (ReAct loop)
+        if last and hasattr(last, "tool_calls") and last.tool_calls:
+            return "tools"
+
+        # Agent đã trả lời xong — kiểm tra thiếu thông tin
+        if _detect_missing_info(messages) and not _fallback_already_done(messages):
+            return "fallback_search"
+
+        return END
 
     # ------------------------------------------------------------------
-    # Pipeline chính (non-streaming)
+    # Build Graph
     # ------------------------------------------------------------------
-
-    async def ask(self, question: str) -> dict:
-        legal_query = await self.rewrite_legal_query(question)
-        records, context = await self.hybrid_query(legal_query)
-
-        if not records:
-            return {
-                "rewritten_query": legal_query,
-                "records_found": 0,
-                "answer": (
-                    "Xin lỗi, tôi không tìm thấy thông tin liên quan trong cơ sở dữ liệu. "
-                    "Bạn có thể thử hỏi câu khác."
-                ),
-            }
-
-        answer = await self.synthesize_answer(question, context)
-        return {
-            "rewritten_query": legal_query,
-            "records_found": len(records),
-            "answer": answer,
-        }
-
-    # ------------------------------------------------------------------
-    # LangGraph nodes
-    # ------------------------------------------------------------------
-
-    async def _node_rewrite(self, state: RAGState) -> RAGState:
-        q: asyncio.Queue = state["queue"]
-        await q.put({"type": "thought", "content": "🔍 Đang phân tích và chuẩn hóa câu hỏi..."})
-        legal_query = await self.rewrite_legal_query(state["question"])
-        await q.put({"type": "thought", "content": f"✅ Câu hỏi đã được chuẩn hóa: {legal_query}"})
-        return {**state, "legal_query": legal_query}
-
-    async def _node_search(self, state: RAGState) -> RAGState:
-        q: asyncio.Queue = state["queue"]
-        await q.put({"type": "thought", "content": "🗂️ Đang tra cứu cơ sở dữ liệu đồ thị..."})
-        records, context = await self.hybrid_query(state["legal_query"])
-        if records:
-            sources_list = [r["id"] for r in records]
-            sources_str = ", ".join(sources_list)
-            await q.put(
-                {"type": "thought", "content": f"✅ Tìm thấy {len(records)} đoạn luật liên quan: {sources_str}"}
-            )
-        else:
-            await q.put(
-                {"type": "thought", "content": "⚠️ Không tìm thấy dữ liệu phù hợp trong cơ sở dữ liệu."}
-            )
-        return {**state, "records": records, "context": context}
-
-    async def _node_synthesize(self, state: RAGState) -> RAGState:
-        q: asyncio.Queue = state["queue"]
-        if not state["records"]:
-            no_data_msg = (
-                "Xin lỗi, tôi không tìm thấy thông tin liên quan trong cơ sở dữ liệu. "
-                "Bạn có thể thử hỏi câu khác."
-            )
-            await q.put({"type": "answer", "content": no_data_msg})
-            await q.put({
-                "type": "metadata",
-                "content": {"sources": [], "reasoning_steps": 0}
-            })
-            # Lưu AIMessage vào state để checkpoint ghi nhận
-            return {**state, "messages": [AIMessage(content=no_data_msg)]}
-
-        await q.put({"type": "thought", "content": "🤔 Đang phân tích dữ liệu pháp lý và soạn thảo câu trả lời..."})
-
-        # Thu thập toàn bộ nội dung để lưu vào AIMessage
-        full_answer_chunks = []
-        async for chunk_text in self.synthesize_answer_stream(
-            state["question"],
-            state["context"],
-            history=state.get("messages", []),  # truyền lịch sử hội thoại
-        ):
-            await q.put({"type": "answer", "content": chunk_text})
-            full_answer_chunks.append(chunk_text)
-
-        full_answer = "".join(full_answer_chunks)
-
-        sources_list = [r["id"] for r in state["records"]]
-        await q.put({
-            "type": "metadata",
-            "content": {"sources": sources_list, "reasoning_steps": 4}
-        })
-
-        # Lưu câu trả lời vào messages để checkpoint ghi nhận
-        # → Lần sau load checkpoint sẽ thấy cả câu hỏi lẫn câu trả lời này
-        return {**state, "messages": [AIMessage(content=full_answer)]}
 
     def _build_graph(self):
         """
-        Compile LangGraph một lần duy nhất khi khởi động.
-
-        Nếu có checkpointer:
-          - LangGraph tự động load state cũ từ PostgreSQL theo thread_id
-            trước mỗi invoke, và tự lưu lại sau khi hoàn thành.
-          - Hoàn toàn async → không block event-loop.
-
-        Nếu không có checkpointer:
-          - Graph chạy stateless như cũ.
+        Sơ đồ luồng:
+             [START]
+                │
+             [agent] ◄────────────────┐
+                │                     │
+           ┌────┴─────────┐           │
+           │              │           │
+      tool_calls?   missing_info?     │
+           │              │           │
+        [tools]   [fallback_search]   │
+           │              │           │
+           └──────────────┴───────────┘
+                  │
+               [agent]
+                  │
+               [END]
         """
         graph = StateGraph(RAGState)
-        graph.add_node("rewrite",    self._node_rewrite)
-        graph.add_node("search",     self._node_search)
-        graph.add_node("synthesize", self._node_synthesize)
-        graph.set_entry_point("rewrite")
-        graph.add_edge("rewrite",    "search")
-        graph.add_edge("search",     "synthesize")
-        graph.add_edge("synthesize", END)
+
+        # Nodes
+        graph.add_node("agent", self._node_agent)
+        graph.add_node("tools", ToolNode(self._tools))
+        graph.add_node("fallback_search", self._node_fallback_search)
+
+        # Edges
+        graph.set_entry_point("agent")
+        graph.add_conditional_edges(
+            "agent",
+            self._route_after_agent,
+            {"tools": "tools", "fallback_search": "fallback_search", END: END},
+        )
+        graph.add_edge("tools", "agent")
+        graph.add_edge("fallback_search", "agent")  # agent tổng hợp lại sau fallback
 
         compiled = graph.compile(checkpointer=self._checkpointer)
         if self._checkpointer:
-            logging.info("✅ LangGraph compiled với AsyncPostgresSaver (có memory).")
+            logging.info("✅ LangGraph compiled với AsyncPostgresSaver (có memory) — ReAct + Fallback.")
         else:
-            logging.warning("⚠️  LangGraph compiled KHÔNG có checkpointer (stateless).")
+            logging.warning("⚠️  LangGraph compiled KHÔNG có checkpointer (stateless) — ReAct + Fallback.")
         return compiled
+
+    # ------------------------------------------------------------------
+    # Source extraction helpers
+    # ------------------------------------------------------------------
+
+    _RE_GRAPH_SOURCE = re.compile(
+        r"---\s*Nguồn\s+(\S+)\s*\(độ tương đồng:\s*([\d.]+)\)\s*---"
+    )
+    _RE_WEB_URL = re.compile(r"^URL\s*:\s*(https?://\S+)", re.MULTILINE)
+
+    @staticmethod
+    def _extract_sources_from_tool(tool_name: str, output: str) -> list[dict]:
+        """Parse tool output text thành danh sách source có cấu trúc."""
+        sources: list[dict] = []
+
+        if tool_name == "search_legal_graph":
+            for m in RAGService._RE_GRAPH_SOURCE.finditer(output):
+                sources.append({
+                    "type": "knowledge_graph",
+                    "id": m.group(1),
+                    "score": float(m.group(2)),
+                })
+
+        elif tool_name == "web_search":
+            for m in RAGService._RE_WEB_URL.finditer(output):
+                sources.append({
+                    "type": "web",
+                    "url": m.group(1),
+                })
+
+        return sources
 
     # ------------------------------------------------------------------
     # Pipeline streaming (LangGraph)
     # ------------------------------------------------------------------
 
     async def ask_stream(self, question: str, conversation_id: str | None = None):
-        """
-        Async generator yield labeled NDJSON chunks:
-          {"type": "thought", "content": "..."}
-          {"type": "answer",  "content": "..."}
-          {"type": "metadata", "content": {...}}
-          {"type": "done"}
-
-        conversation_id được dùng làm thread_id trong LangGraph config.
-        LangGraph sẽ dùng thread_id để:
-          1. Load checkpoint (lịch sử hội thoại) từ PostgreSQL trước khi chạy.
-          2. Lưu checkpoint mới sau khi graph hoàn thành.
-        Vì AsyncPostgresSaver là async, bước này không block event-loop.
-        """
-        import json
-
-        queue: asyncio.Queue = asyncio.Queue()
-
-        # ── Khởi tạo state ban đầu ────────────────────────────────────────────
-        initial_state: RAGState = {
-            "question":    question,
-            "legal_query": "",
-            "records":     [],
-            "context":     "",
-            "queue":       queue,
-            # Thêm câu hỏi hiện tại vào messages để lưu vào memory
-            "messages":    [HumanMessage(content=question)],
+        initial_state: dict = {
+            "messages": [HumanMessage(content=question)],
         }
 
-        # ── LangGraph config: thread_id xác định "luồng" hội thoại ───────────
-        # Nếu không có conversation_id → dùng "default" (vẫn dùng checkpointer,
-        # nhưng tất cả request không có ID sẽ dùng chung 1 checkpoint)
         thread_id = conversation_id or "default"
         graph_config = {
             "configurable": {
@@ -405,46 +347,77 @@ class RAGService:
             }
         }
 
-        graph = self._graph  # dùng graph đã compile sẵn (không build lại mỗi request)
+        collected_sources: list[dict] = []
+        tool_calls_count = 0
 
-        async def run_graph():
-            try:
-                async for _ in graph.astream(initial_state, config=graph_config):
-                    pass
-            except Exception as e:
-                logging.error(f"[LANGGRAPH] thread_id={thread_id} | Lỗi: {e}")
-                await queue.put({"type": "thought", "content": f"❌ Lỗi trong quá trình xử lý: {e}"})
-            finally:
-                await queue.put(None)  # sentinel
+        try:
+            # Dùng astream_events version v2 thay cho Queue thủ công
+            async for event in self._graph.astream_events(initial_state, config=graph_config, version="v2"):
+                evt_type = event["event"]
 
-        asyncio.create_task(run_graph())
+                if evt_type == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    content = getattr(chunk, "content", None)
+                    if not content:
+                        continue
 
-        while True:
-            item = await queue.get()
-            if item is None:
-                yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
-                break
-            yield json.dumps(item, ensure_ascii=False) + "\n"
+                    # Thinking chunk: content là list [{"type": "thinking", "thinking": "..."}]
+                    if isinstance(content, list):
+                        for item in content:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("type") == "thinking" and item.get("thinking"):
+                                msg = {"type": "thinking", "content": item["thinking"]}
+                                yield json.dumps(msg, ensure_ascii=False) + "\n"
+                            elif item.get("type") == "text" and item.get("text"):
+                                msg = {"type": "answer", "content": item["text"]}
+                                yield json.dumps(msg, ensure_ascii=False) + "\n"
+                    # Answer chunk: content là str
+                    elif isinstance(content, str) and content:
+                        msg = {"type": "answer", "content": content}
+                        yield json.dumps(msg, ensure_ascii=False) + "\n"
+
+                elif evt_type == "on_tool_start":
+                    tool_calls_count += 1
+                    tool_name = event["name"]
+                    msg = {"type": "thought", "content": f"🛠️ Đang tra cứu thông tin qua công cụ '{tool_name}'..."}
+                    yield json.dumps(msg, ensure_ascii=False) + "\n"
+
+                elif evt_type == "on_tool_end":
+                    tool_name = event["name"]
+                    msg = {"type": "thought", "content": f"✅ Hoàn tất công cụ '{tool_name}'."}
+                    yield json.dumps(msg, ensure_ascii=False) + "\n"
+
+                    # Extract sources từ tool output
+                    tool_output = event.get("data", {}).get("output", "")
+                    if isinstance(tool_output, str) and tool_output:
+                        new_sources = self._extract_sources_from_tool(tool_name, tool_output)
+                        collected_sources.extend(new_sources)
+
+        except Exception as e:
+            logging.error(f"[LANGGRAPH] thread_id={thread_id} | Lỗi: {e}")
+            msg = {"type": "thought", "content": f"❌ Lỗi trong quá trình xử lý: {e}"}
+            yield json.dumps(msg, ensure_ascii=False) + "\n"
+
+        # Emit metadata với sources thực tế
+        meta_msg = {
+            "type": "metadata",
+            "content": {
+                "sources": collected_sources,
+                "tool_calls": tool_calls_count,
+            },
+        }
+        yield json.dumps(meta_msg, ensure_ascii=False) + "\n"
+
+        yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
 
     # ------------------------------------------------------------------
     # Tools (dùng cho agentic flow)
     # ------------------------------------------------------------------
 
-    def get_tools(self) -> List[BaseTool]:
-        """
-        Trả về danh sách tất cả các LangChain Tool của service này.
-
-        Dùng để bind vào agent trong agentic flow:
-
-            tools = rag_service.get_tools()
-            agent = create_react_agent(llm, tools=tools, checkpointer=checkpointer)
-
-        Returns
-        -------
-        List[BaseTool]
-            - GraphRetrievalTool: tra cứu đồ thị tri thức Neo4j
-        """
-        return [
+    def _create_tools(self) -> List[BaseTool]:
+        """Tạo danh sách tools 1 lần khi initialize, tái sử dụng trong suốt vòng đời."""
+        tools: List[BaseTool] = [
             make_graph_retrieval_tool(
                 driver=self._driver,
                 embed_model=self._embed_model,
@@ -452,9 +425,17 @@ class RAGService:
             )
         ]
 
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
+        if self._api_key_serper:
+            tools.append(
+                make_web_search_tool(
+                    serper_api_key=self._api_key_serper,
+                    firecrawl_api_key=self._api_key_firecrawl,
+                )
+            )
+        else:
+            logging.warning("[RAGService] SERPER_API_KEY chưa được cấu hình — WebSearchTool bị bỏ qua.")
+
+        return tools
 
     async def close(self):
         if self._driver:
