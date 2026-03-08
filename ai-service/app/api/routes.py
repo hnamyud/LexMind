@@ -90,3 +90,29 @@ async def ask_question_stream(request: Request, body: AskRequest):
         svc.ask_stream(body.question, body.conversation_id),
         media_type="application/x-ndjson",
     )
+
+
+@router.delete("/conversations/{conversation_id}/checkpoints", tags=["RAG"])
+async def clear_conversation_checkpoint(conversation_id: str, request: Request):
+    """
+    Xóa toàn bộ checkpoint (bộ nhớ LangGraph) của một conversation_id.
+    Thích hợp dùng cho tính năng Regenerate khi muốn loại bỏ lịch sử cũ bị lỗi.
+    """
+    svc = _get_service(request)
+    if not svc._checkpointer:
+        return {"status": "ok", "message": "Checkpointer không được thiết lập."}
+    
+    try:
+        # Trong psycopg v3, biến truyền vào dùng %s
+        # svc._checkpointer.conn chính là AsyncConnectionPool
+        pool = svc._checkpointer.conn
+        async with pool.connection() as conn:
+            await conn.execute("DELETE FROM checkpoints WHERE thread_id = %s;", (conversation_id,))
+            await conn.execute("DELETE FROM checkpoint_blobs WHERE thread_id = %s;", (conversation_id,))
+            await conn.execute("DELETE FROM checkpoint_writes WHERE thread_id = %s;", (conversation_id,))
+            
+        return {"status": "success", "message": f"Đã xoá checkpoint cho conversation {conversation_id}"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi xóa checkpoint: {str(e)}")

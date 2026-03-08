@@ -8,6 +8,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { TransformInterceptor } from './core/interceptors/transform.interceptor';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { PoliciesGuard } from './common/guards/policy.guard';
+import { CaslAbilityFactory } from './core/casl/ability.factory';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -34,6 +36,7 @@ async function bootstrap() {
   // Use JWT global
   app.useGlobalGuards(
     new JwtAuthGuard(reflector),
+    new PoliciesGuard(reflector, app.get(CaslAbilityFactory)),
   );
   app.useGlobalPipes(new ValidationPipe(
     {
@@ -42,7 +45,7 @@ async function bootstrap() {
       transform: true
     }
   ));
-  
+
   // Transform response from controller
   app.useGlobalInterceptors(new TransformInterceptor(reflector));
 

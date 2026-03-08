@@ -19,13 +19,13 @@ export class ConversationsService {
         })
     }
 
-    async deleteConversation(id: string) {
-        return await this.prisma.conversation.delete({
-            where: {
-                id: id
-            }
-        })
-    }
+    // async deleteConversation(id: string) {
+    //     return await this.prisma.conversation.delete({
+    //         where: {
+    //             id: id
+    //         }
+    //     })
+    // }
 
     async findAll(currentPage: number, limit: number, user: IUser) {
         let offset = (+currentPage - 1) * (+limit);
@@ -75,7 +75,7 @@ export class ConversationsService {
             throw new BadRequestException(`Conversation: ${id} không tồn tại`);
         }
         if (conversation.userId !== user.id) {
-            throw new UnauthorizedException('You are not authorized to access this conversation');
+            throw new UnauthorizedException('Bạn không có quyền truy cập vào cuộc trò chuyện này');
         }
         return conversation;
     }

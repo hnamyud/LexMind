@@ -9,13 +9,14 @@ export class MessagesController {
   constructor(private readonly messagesService: MessagesService) { }
 
   @Get('/')
+  
   @ApiBearerAuth('access-token')
-  @ResponseMessage('Get messages by conversation id')
+  @ResponseMessage('Lấy danh sách tin nhắn thành công!')
   async getAllMessageById(
     @Query('conversationId') conversationId: string,
     @Query('current') currentPage: string,
     @Query('pageSize') limit: string,
-    @GetUser() user: IUser
+    @GetUser() user: IUser,
   ) {
     return this.messagesService.findAll(+currentPage || 1, +limit || 10, conversationId, user);
   }

@@ -14,6 +14,6 @@ import { ConversationsModule } from '../conversations/conversations.module';
     HttpModule
   ],
   controllers: [ChatController],
-  providers: [ChatService],
+  providers: [ChatService]
 })
 export class ChatModule { }

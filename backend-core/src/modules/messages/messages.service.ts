@@ -1,13 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { IUser } from 'src/common/interfaces/users.interface';
+import { ChatService } from '../chat/chat.service';
 
 @Injectable()
 export class MessagesService {
     constructor(
         private prisma: PrismaService,
-        private conversationService: ConversationsService,
+        private conversationService: ConversationsService
     ) { }
 
     async createMessage(data: {
@@ -72,8 +73,24 @@ export class MessagesService {
     }
 
     async deleteMessage(messageId: string) {
+        const message = await this.prisma.message.findUnique({
+            where: { id: messageId },
+        });
+        if (!message) {
+            throw new BadRequestException(`Message: ${messageId} không tồn tại`);
+        }
         return await this.prisma.message.delete({
             where: { id: messageId },
         });
+    }
+
+    async getMessageById(messageId: string) {
+        const message = await this.prisma.message.findUnique({
+            where: { id: messageId },
+        });
+        if (!message) {
+            throw new BadRequestException(`Message: ${messageId} không tồn tại`);
+        }
+        return message;
     }
 }

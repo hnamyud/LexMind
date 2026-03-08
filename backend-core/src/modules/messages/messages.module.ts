@@ -3,6 +3,7 @@ import { MessagesService } from './messages.service';
 import { MessagesController } from './messages.controller';
 import { PrismaModule } from 'prisma/prisma.module';
 import { ConversationsModule } from '../conversations/conversations.module';
+import { ChatModule } from '../chat/chat.module';
 
 @Module({
   imports: [

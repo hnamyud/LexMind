@@ -36,22 +36,62 @@ export class ChatService {
     });
 
     // AbortController: huỷ khi client đóng tab hoặc nhấn stop
+    return this._streamFromAI(question, conversation_id, res, userMsg.id);
+  }
+
+  async regenerateMessage(messageId: string, res: Response) {
+    // 1. Phân tích tin nhắn muốn regenerate
+    const messageToRegenerate = await this.messageService.getMessageById(messageId);
+
+    if (messageToRegenerate.sender !== 'bot') {
+      throw new Error('Chỉ có thể tạo lại câu trả lời của AI.');
+    }
+
+    const conversationId = messageToRegenerate.conversationId;
+    const parentId = messageToRegenerate.parentId;
+
+    if (!parentId) {
+      throw new Error('Không tìm thấy câu hỏi gốc để tạo lại.');
+    }
+
+    // 2. Tìm câu hỏi gốc của user
+    const originalQuestionMsg = await this.messageService.getMessageById(parentId);
+    const questionText = originalQuestionMsg.content;
+
+    // 3. Xóa tin nhắn AI bị lỗi (Lưu ý: Bạn cũng cần viết API gọi sang backend Python AI để xóa tin này khỏi memory checkpointer)
+    await this.messageService.deleteMessage(messageId);
+
+    // Xoá checkpoint trong bộ nhớ LangGraph qua API vừa tạo ở FastAPI
+    try {
+      await this.httpService.axiosRef.delete(`http://127.0.0.1:8001/conversations/${conversationId}/checkpoints`);
+      this.logger.log(`[regenerate] Đã xóa checkpoint của conversation: ${conversationId}`);
+    } catch (err) {
+      this.logger.error(`[regenerate] Lỗi khi xóa checkpoint conversation ${conversationId}:`, err);
+    }
+
+    // 4. Bắt đầu trả luồng SSE lại bình thường!
+    // Tại đây, bạn KHÔNG NÊN gọi hàm `this.askAI` lại một cách nguyên bản vì:
+    // Hàm askAI sẽ TẠO THÊM 1 MESSAGE CÂU HỎI MỚI VÀO DB (do có đoạn await this.messageService.createMessage(..)).
+    // Mà trong ngữ cảnh Regenerate, câu hỏi gốc (originalQuestionMsg) VẪN ĐANG NẰM TRONG DB.
+
+    // Vì vậy tôi tách luồng Stream logic thành một Helper method bên dưới để bạn tái sử dụng:
+    return this._streamFromAI(questionText, conversationId, res, parentId); // Giữ nguyên parentId để message bot mới map đúng vào.
+  }
+
+  // ============== HELPER STREAM AI ==============
+  private async _streamFromAI(question: string, conversation_id: string, res: Response, parentMsgId: string) {
     const abortController = new AbortController();
     const { signal } = abortController;
     let isAborted = false;
 
-    // Lắng nghe sự kiện client ngắt kết nối (đóng tab / nhấn stop)
     res.req.on('close', () => {
       if (!isAborted && !res.writableEnded) {
         isAborted = true;
-        this.logger.warn(
-          `[askAI] Client ngắt kết nối — huỷ stream AI (conv: ${conversation_id})`,
-        );
+        this.logger.warn(`[streamAI] Client ngắt kết nối — huỷ stream AI (conv: ${conversation_id})`);
         abortController.abort();
       }
     });
 
-    // Gọi FastAPI AI service (truyền signal để axios tự huỷ khi abort)
     const response = await this.httpService.axiosRef.post(
       'http://127.0.0.1:8001/ask/stream',
       { question, conversation_id: conversation_id },
@@ -66,95 +106,55 @@ export class ChatService {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // Helper: ghi 1 dòng SSE và tích luỹ response
     const processLine = (line: string) => {
       if (!line.trim()) return;
-
       res.write(`data: ${line}\n\n`);
-
       try {
         const parsed = JSON.parse(line);
-        if (parsed.type === 'answer') {
-          fullResponse += parsed.content;
-        } else if (parsed.type === 'metadata') {
-          metadata = parsed.content;
-        }
+        if (parsed.type === 'answer') fullResponse += parsed.content;
+        else if (parsed.type === 'metadata') metadata = parsed.content;
       } catch (error) {
         this.logger.error(`Lỗi parse dòng: ${line}`, error);
       }
     };
 
-    // Helper: lưu bot message khi AI trả lời xong
-    const saveBotMessage = async () => {
+    response.data.on('data', (chunk: Buffer) => {
+      if (isAborted) return;
+      lineBuffer += chunk.toString();
+      const lines = lineBuffer.split('\n');
+      lineBuffer = lines.pop() || '';
+      for (const line of lines) processLine(line);
+    });
+
+    response.data.on('end', async () => {
+      if (isAborted) return;
+      if (lineBuffer.trim()) {
+        processLine(lineBuffer);
+        lineBuffer = '';
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+
       try {
         await this.messageService.createMessage({
           conversationId: conversation_id,
           sender: 'bot',
           content: fullResponse,
-          parentId: userMsg.id,
+          parentId: parentMsgId,
           metadata,
         });
-        this.logger.log(
-          `[askAI] Đã lưu bot message — conv: ${conversation_id}`,
-        );
+        this.logger.log(`[streamAI] Đã lưu bot message — conv: ${conversation_id}`);
       } catch (err) {
         this.logger.error('Lỗi lưu bot message vào DB:', err);
       }
-    };
-
-    // Helper: rollback — xóa user message khi client abort
-    const cleanupOnAbort = async () => {
-      try {
-        await this.messageService.deleteMessage(userMsg.id);
-        this.logger.warn(
-          `[askAI] Đã xóa user message do client abort — id: ${userMsg.id}`,
-        );
-      } catch (err) {
-        this.logger.error('Lỗi xóa user message khi abort:', err);
-      }
-    };
-
-    response.data.on('data', (chunk: Buffer) => {
-      if (isAborted) return; // Bỏ qua data sau khi đã abort
-      lineBuffer += chunk.toString();
-      const lines = lineBuffer.split('\n');
-      lineBuffer = lines.pop() || ''; // giữ lại dòng cuối chưa hoàn chỉnh
-      for (const line of lines) {
-        processLine(line);
-      }
     });
 
-    response.data.on('end', async () => {
-      if (isAborted) return; // 'end' có thể fire sau abort → bỏ qua
-
-      // Xử lý nốt phần còn lại trong buffer
-      if (lineBuffer.trim()) {
-        processLine(lineBuffer);
-        lineBuffer = '';
-      }
-
-      // Báo hiệu Frontend đóng kết nối TRƯỚC (không cần chờ DB)
-      res.write('data: [DONE]\n\n');
-      res.end();
-
-      // Lưu bot message sau khi đã đóng kết nối frontend
-      await saveBotMessage();
-    });
-
-    // Bắt lỗi stream — bao gồm lỗi cancel từ AbortController
     response.data.on('error', async (err: Error) => {
-      const isCanceled =
-        isAborted ||
-        err.name === 'AbortError' ||
-        (err as any).code === 'ERR_CANCELED';
-
+      const isCanceled = isAborted || err.name === 'AbortError' || (err as any).code === 'ERR_CANCELED';
       if (isCanceled) {
-        // Client chủ động huỷ → xóa user message (rollback)
         if (!res.writableEnded) res.end();
-        await cleanupOnAbort();
         return;
       }
-
       this.logger.error('Lỗi stream từ FastAPI:', err);
       if (!res.writableEnded) {
         res.write(`data: {"type": "error", "content": "Mất kết nối với AI"}\n\n`);

@@ -2,7 +2,7 @@
 import { HelmetOptions } from 'helmet';
 
 export const helmetConfig: HelmetOptions = {
-  // ✅ Content Security Policy
+  // Content Security Policy
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],

@@ -49,7 +49,7 @@ export class AuthService {
 
             let user = await this.userService.queryUserByToken(refreshToken);
             if (!user) {
-                throw new BadRequestException('Invalid refresh token');
+                throw new BadRequestException('Refresh token không hợp lệ!');
             }
             const { id, email, role } = user;
             const payload = {
@@ -81,7 +81,7 @@ export class AuthService {
             };
         }
         catch (error) {
-            throw new BadRequestException('Invalid refresh token');
+            throw new BadRequestException('Refresh token không hợp lệ!');
         }
     }
 
@@ -151,18 +151,18 @@ export class AuthService {
             });
 
             return {
-                message: 'Logout successfully',
+                message: 'Đăng xuất thành công!',
                 loggedOut: true,
                 timestamp: new Date().toISOString()
             };
         } catch (error) {
-            throw new UnauthorizedException('Logout failed');
+            throw new UnauthorizedException('Đăng xuất thất bại!');
         }
     }
 
     async verifyAdminAccess(user: IUser) {
         if (user.role !== UserRole.ADMIN) {
-            throw new UnauthorizedException('Admin access required');
+            throw new UnauthorizedException('Truy cập bị từ chối!');
         }
         return true;
     }
@@ -194,12 +194,12 @@ export class AuthService {
         if (attempts && parseInt(attempts) >= 5) {
             await this.redisClient.del(redisKey); // Delete OTP from Redis
             await this.redisClient.del(attemptsKey);
-            throw new BadRequestException('You have tried too many times. Please request a new OTP.');
+            throw new BadRequestException('Bạn đã nhập sai OTP quá nhiều lần! Vui lòng yêu cầu OTP mới.');
         }
 
         const storedOtp = await this.redisClient.get(redisKey);
         if (!storedOtp) {
-            throw new BadRequestException('Invalid OTP or OTP has expired!');
+            throw new BadRequestException('OTP không hợp lệ hoặc đã hết hạn!');
         }
         if (storedOtp !== otp) {
             // Increase number of attempts
@@ -207,7 +207,7 @@ export class AuthService {
 
             // Set time to live for this key (example 5 minutes = equal to OTP time)
             await this.redisClient.expire(attemptsKey, 300);
-            throw new BadRequestException('Invalid OTP!');
+            throw new BadRequestException('OTP không hợp lệ!');
         }
 
         // If correct, delete the key count (so that the next time the user resets, they don't get stuck with the old limit)
@@ -224,7 +224,7 @@ export class AuthService {
         const user = await this.userService.findOneByEmail(resetPasswordDto.email);
         if (!user) {
             // Case hiếm: Có OTP trong Redis nhưng User lại bị xóa khỏi DB rồi
-            throw new BadRequestException('User not found.');
+            throw new BadRequestException('Không tìm thấy tài khoản!');
         }
         const hashPassword = await this.userService.getHashPassword(resetPasswordDto.newPassword);
         await this.userService.updateUserPassword(resetPasswordDto.email, hashPassword);

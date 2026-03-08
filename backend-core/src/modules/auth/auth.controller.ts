@@ -11,6 +11,9 @@ import { GoogleAuthGuard } from 'src/common/guards/google-auth.guard';
 import { ResetPasswordDto, VerifyOtpDto } from './dto/reset-password.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { IUser } from 'src/common/interfaces/users.interface';
+import { Ability } from '@casl/ability';
+import { CheckPolicies } from 'src/core/decorators/policy.decorator';
+import { Action } from 'src/common/enum/action.enum';
 
 @Controller('auth')
 export class AuthController {
@@ -23,13 +26,13 @@ export class AuthController {
   @Post('/login')
   @Public()
   @UseGuards(LocalAuthGuard)
-  @ResponseMessage('Login success')
+  @ResponseMessage('Đăng nhập thành công!')
   @ApiBody({
     type: LoginDto,
-    description: 'User login credentials',
+    description: 'Thông tin đăng nhập',
     examples: {
       default: {
-        summary: 'Login',
+        summary: 'Đăng nhập',
         value: {
           email: 'admin@gmail.com',
           password: '123456'
@@ -46,7 +49,7 @@ export class AuthController {
 
   @Post('/logout')
   @ApiBearerAuth('access-token')
-  @ResponseMessage("User logout")
+  @ResponseMessage("Đăng xuất thành công!")
   handleLogout(
     @Req() req: Request & { user: any },
     @Res({ passthrough: true }) response: Response
@@ -56,7 +59,7 @@ export class AuthController {
 
   @Post('/register')
   @Public()
-  @ResponseMessage('Register success')
+  @ResponseMessage('Đăng ký thành công!')
   @ApiBody({ type: RegisterUserDto })
   async handleRegister(
     @Body() RegisterUserDto: RegisterUserDto
@@ -67,7 +70,7 @@ export class AuthController {
   @Get('/google/login')
   @Public()
   @UseGuards(GoogleAuthGuard)
-  @ResponseMessage("Google login")
+  @ResponseMessage("Đăng nhập bằng Google")
   handleGoogleLogin() {
     // This route will redirect to Google for authentication
   }
@@ -85,25 +88,29 @@ export class AuthController {
   }
 
   @Get('/profile')
+  @CheckPolicies({
+    handle: (ability: Ability) => ability.can(Action.Read, 'User'),
+    message: 'Bạn không có quyền đọc thông tin user!'
+  })
   @ApiBearerAuth('access-token')
-  @ResponseMessage("Get user profile")
+  @ResponseMessage("Lấy thông tin user thành công!")
   async getProfile(@GetUser() user: IUser) {
     return await this.authService.getUserInfo(user);
   }
 
   @Post('/verify-otp')
   @Public()
-  @ResponseMessage("Verify OTP")
+  @ResponseMessage("Xác thực OTP thành công!")
   @ApiBody({ type: VerifyOtpDto })
   async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
     const isValid = await this.authService.verifyOtp(verifyOtpDto.email, verifyOtpDto.otp);
-    if (!isValid) throw new BadRequestException('Invalid OTP or OTP has expired!');
-    return { message: 'Success!' };
+    if (!isValid) throw new BadRequestException('OTP không hợp lệ hoặc đã hết hạn!');
+    return { message: 'Xác thực OTP thành công!' };
   }
 
   @Post('/reset-password')
   @Public()
-  @ResponseMessage("Reset password")
+  @ResponseMessage("Đặt lại mật khẩu thành công!")
   @ApiBody({ type: ResetPasswordDto })
   async handleResetPassword(
     @Body() resetPasswordDto: ResetPasswordDto
@@ -113,15 +120,12 @@ export class AuthController {
 
   @Post('/change-password')
   @ApiBearerAuth('access-token')
-  @ResponseMessage("Change password")
+  @ResponseMessage("Thay đổi mật khẩu thành công!")
   @ApiBody({ type: ChangePasswordDto })
   async handleChangePassword(
     @GetUser() user: IUser,
     @Body() changePasswordDto: ChangePasswordDto
   ) {
-    if (changePasswordDto.newPassword !== changePasswordDto.confirmPassword) {
-      throw new BadRequestException('Mật khẩu xác nhận không khớp');
-    }
     return await this.authService.changePassword(user.id, changePasswordDto);
   }
 }

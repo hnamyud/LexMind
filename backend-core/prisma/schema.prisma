@@ -24,6 +24,8 @@ model User {
   
   // Quan hệ 1-nhiều với Conversations
   conversations Conversation[]
+  // Quan hệ: Một user có thể phản hồi nhiều tin nhắn
+  feedbacks     Feedback[]
 
   @@map("users") // Tên table thực tế trong Postgres
 }
@@ -59,7 +61,75 @@ model Message {
   // Quan hệ: Một message thuộc về một Conversation
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
+  // Quan hệ: Một message có thể có các Feedback (Phản hồi đánh giá tư vấn)
+  feedbacks      Feedback[]
+
   // Compound Index để tối ưu truy vấn lịch sử chat
   @@index([conversationId, createdAt], name: "idx_messages_history")
   @@map("messages")
+}
+
+model Feedback {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId   String   @map("message_id") @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  isLike      Boolean  @map("is_like")
+  reason      String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId]) // Đảm bảo 1 user chỉ vote 1 lần cho 1 tin nhắn
+  @@map("feedbacks")
+}
+
+// -----------------------------------------------------------------------------
+// LangGraph Checkpointer Models
+// (Khai báo để Prisma kiểm soát các bảng này tránh báo lỗi "Drift detected")
+// -----------------------------------------------------------------------------
+
+model checkpoint_blobs {
+  thread_id     String
+  checkpoint_ns String @default("")
+  channel       String
+  version       String
+  type          String
+  blob          Bytes?
+
+  @@id([thread_id, checkpoint_ns, channel, version])
+  @@index([thread_id])
+}
+
+model checkpoint_migrations {
+  v Int @id
+}
+
+model checkpoint_writes {
+  thread_id     String
+  checkpoint_ns String  @default("")
+  checkpoint_id String
+  task_id       String
+  idx           Int
+  channel       String
+  type          String?
+  blob          Bytes
+  task_path     String  @default("")
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id, task_id, idx])
+  @@index([thread_id])
+}
+
+model checkpoints {
+  thread_id            String
+  checkpoint_ns        String  @default("")
+  checkpoint_id        String
+  parent_checkpoint_id String?
+  type                 String?
+  checkpoint           Json
+  metadata             Json    @default("{}")
+
+  @@id([thread_id, checkpoint_ns, checkpoint_id])
+  @@index([thread_id])
 }
