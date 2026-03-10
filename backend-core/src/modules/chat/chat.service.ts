@@ -1,5 +1,6 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { MessagesService } from '../messages/messages.service';
 import { ConversationsService } from '../conversations/conversations.service';
@@ -12,6 +13,7 @@ export class ChatService {
     private readonly httpService: HttpService,
     private messageService: MessagesService,
     private conversationService: ConversationsService,
+    private readonly configService: ConfigService,
   ) { }
 
   async askAI(question: string, conversationId: string, res: Response) {
@@ -63,7 +65,13 @@ export class ChatService {
 
     // Xoá checkpoint trong bộ nhớ LangGraph qua API vừa tạo ở FastAPI
     try {
-      await this.httpService.axiosRef.delete(`http://127.0.0.1:8001/conversations/${conversationId}/checkpoints`);
+      const secret = this.configService.get<string>('X-Internal-Secret');
+      const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
+      const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
+
+      await this.httpService.axiosRef.delete(`http://${fastApiUrl}:${fastApiPort}/conversations/${conversationId}/checkpoints`, {
+        headers: { 'X-Internal-Secret': secret },
+      });
       this.logger.log(`[regenerate] Đã xóa checkpoint của conversation: ${conversationId}`);
     } catch (err) {
       this.logger.error(`[regenerate] Lỗi khi xóa checkpoint conversation ${conversationId}:`, err);
@@ -92,10 +100,18 @@ export class ChatService {
       }
     });
 
+    const secret = this.configService.get<string>('X-Internal-Secret');
+    const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
+    const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
+
     const response = await this.httpService.axiosRef.post(
-      'http://127.0.0.1:8001/ask/stream',
+      `http://${fastApiUrl}:${fastApiPort}/ask/stream`,
       { question, conversation_id: conversation_id },
-      { responseType: 'stream', signal },
+      {
+        responseType: 'stream',
+        signal,
+        headers: { 'X-Internal-Secret': secret },
+      },
     );
 
     let fullResponse = '';

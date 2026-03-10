@@ -107,6 +107,15 @@ class RAGService:
         self._connect_llm()
         await loop.run_in_executor(None, self._load_embed_model)
         self._tools = self._create_tools()
+
+        # Validate dependencies
+        if not self._driver:
+            raise RuntimeError("Khởi tạo RAGService thất bại: Lỗi kết nối Neo4j.")
+        if not self._llm:
+            raise RuntimeError("Khởi tạo RAGService thất bại: Lỗi cấu hình LLM (Gemini).")
+        if not self._embed_model:
+            raise RuntimeError("Khởi tạo RAGService thất bại: Không tải được embedding model.")
+
         self._graph = self._build_graph()
 
     async def _connect_neo4j(self):

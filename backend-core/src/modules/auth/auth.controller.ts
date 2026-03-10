@@ -14,6 +14,7 @@ import type { IUser } from 'src/common/interfaces/users.interface';
 import { Ability } from '@casl/ability';
 import { CheckPolicies } from 'src/core/decorators/policy.decorator';
 import { Action } from 'src/common/enum/action.enum';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
 export class AuthController {
@@ -100,6 +101,7 @@ export class AuthController {
 
   @Post('/verify-otp')
   @Public()
+  @Throttle({ short: { ttl: 60000, limit: 3 } }) 
   @ResponseMessage("Xác thực OTP thành công!")
   @ApiBody({ type: VerifyOtpDto })
   async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
@@ -110,6 +112,7 @@ export class AuthController {
 
   @Post('/reset-password')
   @Public()
+  @Throttle({ short: { ttl: 60000, limit: 3 } }) 
   @ResponseMessage("Đặt lại mật khẩu thành công!")
   @ApiBody({ type: ResetPasswordDto })
   async handleResetPassword(

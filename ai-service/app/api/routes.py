@@ -1,10 +1,20 @@
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
+from app.core.config import settings
+
 router = APIRouter()
+
+api_key_header = APIKeyHeader(name="X-Internal-Secret", auto_error=True)
+
+def verify_internal_secret(api_key: str = Depends(api_key_header)):
+    if api_key != settings.INTERNAL_SECRET:
+        raise HTTPException(status_code=403, detail="X-Internal-Secret không hợp lệ")
+    return api_key
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +83,7 @@ async def debug_info(request: Request):
 # RAG endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/ask/stream", tags=["RAG"])
+@router.post("/ask/stream", tags=["RAG"], dependencies=[Depends(verify_internal_secret)])
 async def ask_question_stream(request: Request, body: AskRequest):
     """
     Pipeline RAG với StreamingResponse (NDJSON):
@@ -92,7 +102,7 @@ async def ask_question_stream(request: Request, body: AskRequest):
     )
 
 
-@router.delete("/conversations/{conversation_id}/checkpoints", tags=["RAG"])
+@router.delete("/conversations/{conversation_id}/checkpoints", tags=["RAG"], dependencies=[Depends(verify_internal_secret)])
 async def clear_conversation_checkpoint(conversation_id: str, request: Request):
     """
     Xóa toàn bộ checkpoint (bộ nhớ LangGraph) của một conversation_id.

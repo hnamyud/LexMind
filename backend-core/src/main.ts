@@ -99,7 +99,7 @@ async function bootstrap() {
     customSiteTitle: 'Chatbot Law API Docs', // Custom title
     customfavIcon: '/favicon.ico',               // Custom favicon
   });
-
+  app.enableShutdownHooks()
   const port = configService.get('PORT')
   await app.listen(port);
 }

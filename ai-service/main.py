@@ -8,6 +8,8 @@ from app.api.routes import router
 from app.core.checkpoint import build_checkpointer, close_checkpointer
 from app.services.rag_service import RAGService
 
+from app.core.config import settings
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -78,4 +80,4 @@ app.include_router(router)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
+    uvicorn.run("main:app", host=settings.FASTAPI_URI, port=settings.FASTAPI_PORT, reload=True)

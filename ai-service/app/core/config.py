@@ -14,14 +14,14 @@ class Settings:
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
-    EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID", "keepitreal/vietnamese-sbert")
+    EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID")
 
     # PostgreSQL dùng cho LangGraph AsyncPostgresSaver
     # Format: postgresql+psycopg://user:password@host:port/dbname
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+psycopg://postgres:postgres@localhost:5432/chatbot_law",
-    )
+    DATABASE_URL: str = os.getenv("DATABASE_URL")
+    INTERNAL_SECRET: str = os.getenv("X-Internal-Secret")
+    FASTAPI_URI: str = os.getenv("FASTAPI_URI")
+    FASTAPI_PORT: str = os.getenv("FASTAPI_PORT")
 
 
 settings = Settings()
