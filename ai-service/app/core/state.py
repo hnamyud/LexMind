@@ -8,3 +8,15 @@ class RAGState(TypedDict):
     # thay vì ghi đè toàn bộ list, nó *append* message mới vào cuối.
     # Nhờ đó lịch sử hội thoại được tích lũy qua các lần invoke.
     messages: Annotated[List[Any], add_messages]
+
+    # ── Step 1: Router + Extractor output ────────────────────────────────────
+    route: str         # "use_tool" | "direct_answer"
+    legal_query: str   # thuật ngữ pháp lý đã chuẩn hóa
+    entities: dict     # {violation, vehicle_type, subject, conditions[]}
+
+    # ── Step 2: Retriever output ──────────────────────────────────────────────
+    context: str       # raw context text từ Neo4j (hoặc web)
+
+    # ── Step 3: Reflector output ──────────────────────────────────────────────
+    reflection: str              # "sufficient" | "needs_clarification" | "not_found"
+    clarification_question: str  # câu hỏi ngược lại cho user (nếu needs_clarification)

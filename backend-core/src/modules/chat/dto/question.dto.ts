@@ -5,7 +5,7 @@ export class QuestionDto {
     @ApiProperty()
     @IsString()
     @IsNotEmpty()
-    @MinLength(10)
+    @MinLength(2)
     @MaxLength(1000)
     question: string;
 

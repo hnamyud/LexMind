@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -18,77 +12,61 @@ model User {
   password      String
   fullName      String?        @map("full_name")
   role          String         @default("USER")
-  refreshToken  String?        @unique @map("refresh_token")
   createdAt     DateTime       @default(now()) @map("created_at")
+  refreshToken  String?        @unique @map("refresh_token")
   deletedAt     DateTime?      @map("deleted_at")
-  
-  // Quan hệ 1-nhiều với Conversations
   conversations Conversation[]
-  // Quan hệ: Một user có thể phản hồi nhiều tin nhắn
   feedbacks     Feedback[]
 
-  @@map("users") // Tên table thực tế trong Postgres
+  @@map("users")
 }
 
 model Conversation {
-  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String    @map("user_id") @db.Uuid
-  title       String?
-  summary     String?   @db.Text // Tương đương text trong DBML
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
-  isDeleted   Boolean   @default(false) @map("is_deleted")
-  deletedAt   DateTime? @map("deleted_at")
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  title     String?
+  summary   String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+  isDeleted Boolean   @default(false) @map("is_deleted")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  Message[]
 
-  // Quan hệ: Một conversation thuộc về một User
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // Quan hệ: Một conversation có nhiều Messages
-  messages    Message[]
-
-  @@index([userId]) // Index theo yêu cầu của bạn
+  @@index([userId])
   @@map("conversations")
 }
 
 model Message {
   id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  parentId       String?      @map("parent_id") @db.Uuid
   conversationId String       @map("conversation_id") @db.Uuid
   sender         String
-  content        String       @db.Text
-  metadata       Json?        @db.JsonB // Lưu trữ linh hoạt cho LLM
+  content        String
+  thought        String?      @db.Text
+  metadata       Json?
   createdAt      DateTime     @default(now()) @map("created_at")
-
-  // Quan hệ: Một message thuộc về một Conversation
+  parentId       String?      @map("parent_id") @db.Uuid
+  feedbacks      Feedback[]
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
-  // Quan hệ: Một message có thể có các Feedback (Phản hồi đánh giá tư vấn)
-  feedbacks      Feedback[]
-
-  // Compound Index để tối ưu truy vấn lịch sử chat
-  @@index([conversationId, createdAt], name: "idx_messages_history")
+  @@index([conversationId, createdAt], map: "idx_messages_history")
   @@map("messages")
 }
 
 model Feedback {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  messageId   String   @map("message_id") @db.Uuid
-  userId      String   @map("user_id") @db.Uuid
-  isLike      Boolean  @map("is_like")
-  reason      String?  @db.Text
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  messageId String   @map("message_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  isLike    Boolean  @map("is_like")
+  reason    String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId]) // Đảm bảo 1 user chỉ vote 1 lần cho 1 tin nhắn
+  @@unique([messageId, userId])
   @@map("feedbacks")
 }
-
-// -----------------------------------------------------------------------------
-// LangGraph Checkpointer Models
-// (Khai báo để Prisma kiểm soát các bảng này tránh báo lỗi "Drift detected")
-// -----------------------------------------------------------------------------
 
 model checkpoint_blobs {
   thread_id     String

@@ -67,7 +67,7 @@ export class AuthService {
             response.cookie('refresh_token', newRefreshToken, {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
+                sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
                 maxAge: ms(this.configService.get<string>('JWT_REFRESH_EXPIRED') as StringValue),
             });
 
@@ -109,7 +109,7 @@ export class AuthService {
         response.cookie('refresh_token', refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
             maxAge: ms(this.configService.get<string>('JWT_REFRESH_EXPIRED') as StringValue),
         });
 
@@ -138,7 +138,7 @@ export class AuthService {
             response.clearCookie('refresh_token', {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
+                sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
                 path: '/',
             });
 
@@ -146,7 +146,7 @@ export class AuthService {
             response.clearCookie('access_token', {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
+                sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
                 path: '/',
             });
 

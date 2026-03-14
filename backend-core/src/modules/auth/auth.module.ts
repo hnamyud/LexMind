@@ -8,6 +8,7 @@ import { PrismaModule } from 'prisma/prisma.module';
 import { PassportModule } from '@nestjs/passport';
 import { LocalStrategy } from './passport/local.strategy';
 import { JwtStrategy } from './passport/jwt.strategy';
+import { GoogleStrategy } from './passport/google.strategy';
 import googleOauthConfig from 'src/config/google-oauth.config';
 import { RedisModule } from 'src/shared/cache/redis.module';
 
@@ -31,7 +32,8 @@ import { RedisModule } from 'src/shared/cache/redis.module';
   providers: [
     AuthService,
     LocalStrategy,
-    JwtStrategy
+    JwtStrategy,
+    GoogleStrategy
   ],
 })
 export class AuthModule { }

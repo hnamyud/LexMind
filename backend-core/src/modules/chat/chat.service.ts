@@ -115,6 +115,7 @@ export class ChatService {
     );
 
     let fullResponse = '';
+    let thoughtResponse = '';
     let metadata = {};
     let lineBuffer = '';
 
@@ -122,12 +123,16 @@ export class ChatService {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
+    // Gửi conversationId ngay từ đầu stream để client nhận diện mạch truyện (đặc biệt khi vừa tạo mới)
+    res.write(`data: ${JSON.stringify({ type: 'info', conversationId: conversation_id })}\n\n`);
+
     const processLine = (line: string) => {
       if (!line.trim()) return;
       res.write(`data: ${line}\n\n`);
       try {
         const parsed = JSON.parse(line);
         if (parsed.type === 'answer') fullResponse += parsed.content;
+        else if (parsed.type === 'thinking') thoughtResponse += parsed.content;
         else if (parsed.type === 'metadata') metadata = parsed.content;
       } catch (error) {
         this.logger.error(`Lỗi parse dòng: ${line}`, error);
@@ -148,21 +153,26 @@ export class ChatService {
         processLine(lineBuffer);
         lineBuffer = '';
       }
-      res.write('data: [DONE]\n\n');
-      res.end();
 
       try {
-        await this.messageService.createMessage({
+        const [botMsg] = await this.messageService.createMessage({
           conversationId: conversation_id,
           sender: 'bot',
           content: fullResponse,
+          thought: thoughtResponse,
           parentId: parentMsgId,
           metadata,
         });
         this.logger.log(`[streamAI] Đã lưu bot message — conv: ${conversation_id}`);
+        
+        // Trả về ID của bot message vừa tạo
+        res.write(`data: ${JSON.stringify({ type: 'message_id', messageId: botMsg.id })}\n\n`);
       } catch (err) {
         this.logger.error('Lỗi lưu bot message vào DB:', err);
       }
+
+      res.write('data: [DONE]\n\n');
+      res.end();
     });
 
     response.data.on('error', async (err: Error) => {

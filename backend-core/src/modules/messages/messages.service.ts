@@ -15,6 +15,7 @@ export class MessagesService {
         conversationId: string;
         sender: string;
         content: string;
+        thought?: string;
         parentId?: string;
         metadata?: any;
     }) {
@@ -24,6 +25,7 @@ export class MessagesService {
                     conversationId: data.conversationId,
                     sender: data.sender,
                     content: data.content,
+                    thought: data.thought,
                     parentId: data.parentId,
                     metadata: data.metadata,
                 },
@@ -57,6 +59,7 @@ export class MessagesService {
                 id: true,
                 content: true,
                 sender: true,
+                thought: true,
                 createdAt: true,
             }
         });

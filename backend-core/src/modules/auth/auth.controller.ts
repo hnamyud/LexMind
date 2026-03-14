@@ -99,9 +99,20 @@ export class AuthController {
     return await this.authService.getUserInfo(user);
   }
 
+  @Get('/refresh')
+  @Public()
+  @ResponseMessage("Làm mới token thành công!")
+  async refreshToken(
+    @Req() req: Request,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const refreshToken = req.cookies['refresh_token'];
+    return this.authService.processToken(refreshToken, response);
+  }
+  
   @Post('/verify-otp')
   @Public()
-  @Throttle({ short: { ttl: 60000, limit: 3 } }) 
+  @Throttle({ short: { ttl: 60000, limit: 3 } })
   @ResponseMessage("Xác thực OTP thành công!")
   @ApiBody({ type: VerifyOtpDto })
   async verifyOtp(@Body() verifyOtpDto: VerifyOtpDto) {
@@ -112,7 +123,7 @@ export class AuthController {
 
   @Post('/reset-password')
   @Public()
-  @Throttle({ short: { ttl: 60000, limit: 3 } }) 
+  @Throttle({ short: { ttl: 60000, limit: 3 } })
   @ResponseMessage("Đặt lại mật khẩu thành công!")
   @ApiBody({ type: ResetPasswordDto })
   async handleResetPassword(

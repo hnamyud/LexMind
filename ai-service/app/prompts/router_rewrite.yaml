@@ -21,6 +21,8 @@ template: |
       - Câu hỏi hoàn toàn không liên quan đến pháp luật giao thông
       - Lời khen, phản hồi ngắn ("tốt lắm", "ok", "hiểu rồi")
 
+  •  "out_of_domain" → TẤT CẢ các câu hỏi khác (Kiến thức IT, Microservices, Luật hình sự/dân sự không liên quan đến phương tiện, câu hỏi vô lý/phi logic kiểu 'vượt đèn xanh').
+
   ═══════════════════════════════════════════════════════════════
   NHIỆM VỤ 2 — CHUẨN HÓA THUẬT NGỮ PHÁP LÝ (legal_query)
   ═══════════════════════════════════════════════════════════════
@@ -39,6 +41,23 @@ template: |
   • Nếu route = "direct_answer":
       Để legal_query là chuỗi rỗng "".
 
+  • Nếu route = "out_of_domain": Để legal_query là "REJECT: <lý do từ chối ngắn gọn>".
+  (Ví dụ: "REJECT: Câu hỏi về Microservices nằm ngoài phạm vi tư vấn luật giao thông").
+
+  ═══════════════════════════════════════════════════════════════
+  NHIỆM VỤ 3 — BÓC TÁCH ENTITIES (entities)
+  ═══════════════════════════════════════════════════════════════
+  • Chỉ thực hiện khi route = "use_tool". Nếu route = "direct_answer": entities = {{}}.
+  • Trích xuất 4 trường sau từ TOÀN BỘ NGỮ CẢNH (bao gồm cả lịch sử trò chuyện nếu có), KHÔNG chỉ dựa vào câu hỏi cuối cùng:
+
+    - violation    : hành vi vi phạm đã chuẩn hóa (giống legal_query hoặc chi tiết hơn)
+    - vehicle_type : loại phương tiện liên quan ("ô tô", "xe máy", "xe tải", "xe khách", v.v.)
+                     Để "" nếu ngữ cảnh không đề cập loại xe.
+    - subject      : đối tượng bị phạt ("cá nhân", "tổ chức", hoặc "" nếu không rõ)
+    - conditions   : mảng chuỗi mô tả các điều kiện/tham số đặc biệt đã biết
+                     (vd: ["nồng độ cồn vượt 80mg/100ml", "tốc độ vượt 20km/h"])
+                     Để [] nếu không có điều kiện cụ thể.
+
   ═══════════════════════════════════════════════════════════════
   QUY TẮC ĐẦU RA — BẮT BUỘC
   ═══════════════════════════════════════════════════════════════
@@ -47,10 +66,16 @@ template: |
   • Không chắc chắn về route → chọn "use_tool" (an toàn hơn)
 
   Schema bắt buộc:
-  {
-    "route": "use_tool" | "direct_answer",
-    "legal_query": "<chuỗi thuật ngữ pháp lý hoặc rỗng>"
-  }
+  {{
+    "route": "use_tool" | "direct_answer" | "out_of_domain",
+    "legal_query": "<chuỗi thuật ngữ pháp lý hoặc rỗng / hoặc REJECT: lý do>",
+    "entities": {{
+      "violation": "<hành vi vi phạm hoặc rỗng>",
+      "vehicle_type": "<loại xe hoặc rỗng>",
+      "subject": "<đối tượng hoặc rỗng>",
+      "conditions": ["<điều kiện 1>", "..."]
+    }}
+  }}
 
   ═══════════════════════════════════════════════════════════════
   Câu hỏi của người dùng: {question}
