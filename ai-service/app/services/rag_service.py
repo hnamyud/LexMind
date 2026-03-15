@@ -88,7 +88,7 @@ class RAGService:
         self._checkpointer: Optional[AsyncPostgresSaver] = checkpointer
         self._graph = None
         self._tools: Optional[List[BaseTool]] = None
-        self._system_prompt: str = _load_prompt("synthesis_openai.yaml")
+        self._system_prompt: str = _load_prompt("synthesis.yaml")
         self._router_rewrite_prompt: str = _load_prompt("router_rewrite.yaml")
         self._reflector_prompt: str = _load_prompt("reflector.yaml")
 
@@ -133,20 +133,20 @@ class RAGService:
             logging.error("❌ Thiếu GOOGLE_API_KEY")
             return
         try:
-            # self._llm = ChatGoogleGenerativeAI(
-            #     model="gemini-3-flash-preview",
-            #     google_api_key=self._api_key,
-            #     temperature=0,
-            #     include_thoughts=True,
-            #     thinking_budget=8192,
-            # )
-
-            self._llm = ChatOpenAI(
-                model="free/kimi-k2-0905",
-                api_key=self._api_key_vertex,
-                base_url="https://vertex-key.com/api/v1",
-                temperature=0
+            self._llm = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                google_api_key=self._api_key,
+                temperature=0,
+                include_thoughts=True,
+                thinking_budget=8192,
             )
+
+            # self._llm = ChatOpenAI(
+            #     model="gpt-5.2",
+            #     api_key='proxypal-key',
+            #     base_url="http://localhost:8317/v1",
+            #     temperature=0
+            # )
 
             self._llm_router = ChatGoogleGenerativeAI(
                 model="gemini-3.1-flash-lite-preview",
@@ -303,25 +303,27 @@ class RAGService:
                 break
 
         if not question:
-            return {"context": "(Không xác định được câu hỏi để tìm kiếm web.)"}
+            return {"context": "(Không xác định được câu hỏi để tìm kiếm web.)", "web_sources": []}
 
         web_tool = next((t for t in self._tools if t.name == "web_search"), None)
         if not web_tool:
             logging.warning("[STEP3c] web_search không khả dụng — thiếu SERPER_API_KEY.")
-            return {"context": "(Web search không khả dụng.)"}
+            return {"context": "(Web search không khả dụng.)", "web_sources": []}
 
         logging.info(f"[STEP3c] Tìm web cho: {question[:80]}")
         try:
-            result = await web_tool._arun(query=question)
+            result, web_sources = await web_tool._execute_with_sources(query=question, num=5)
+            logging.info(f"[STEP3c] Tìm được {len(web_sources)} nguồn web.")
             return {
                 "context": (
                     "⚠️ Thông tin KHÔNG có trong Nghị định 168/2024/NĐ-CP. "
                     "Kết quả bổ sung từ tìm kiếm web:\n\n" + result
-                )
+                ),
+                "web_sources": web_sources,
             }
         except Exception as e:
             logging.error(f"[STEP3c] Lỗi web search: {e}")
-            return {"context": f"Lỗi khi tìm kiếm web: {e}"}
+            return {"context": f"Lỗi khi tìm kiếm web: {e}", "web_sources": []}
 
     # ------------------------------------------------------------------
     # Step 4 — Generator
@@ -339,8 +341,8 @@ class RAGService:
         system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
         chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
 
-        # 2. Giữ 10 tin nhắn lịch sử gần nhất (5 lượt chat)
-        recent_chat_msgs = chat_msgs[-10:]
+        # 2. Giữ 8 tin nhắn lịch sử gần nhất (4 lượt chat)
+        recent_chat_msgs = chat_msgs[-8:]
 
         # 3. Ghép lại danh sách messages cho LLM
         messages_to_llm = system_msgs + recent_chat_msgs
@@ -378,7 +380,7 @@ class RAGService:
         
         system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
         chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
-        recent_chat_msgs = chat_msgs[-10:]
+        recent_chat_msgs = chat_msgs[-8:]
 
         messages_to_llm = system_msgs + recent_chat_msgs
 
@@ -668,7 +670,16 @@ class RAGService:
                             if evt_name == "retriever":
                                 collected_sources.extend(RAGService._extract_graph_sources(ctx))
                             elif evt_name == "web_search_fallback":
-                                collected_sources.extend(RAGService._extract_web_sources(ctx))
+                                # Lấy danh sách web sources có cấu trúc từ state
+                                ws = output.get("web_sources", [])
+                                if ws:
+                                    collected_sources.extend(
+                                        {"type": "web", "url": s["url"], "title": s.get("title", "")}
+                                        for s in ws
+                                    )
+                                else:
+                                    # Fallback: regex nếu web_sources rỗng
+                                    collected_sources.extend(RAGService._extract_web_sources(ctx))
 
         except Exception as e:
             logging.error(f"[LANGGRAPH] thread_id={thread_id} | Lỗi: {e}")

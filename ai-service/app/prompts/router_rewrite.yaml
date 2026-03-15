@@ -5,6 +5,34 @@ template: |
   Thực hiện ĐỒNG THỜI hai nhiệm vụ sau và trả về kết quả dạng JSON:
 
   ═══════════════════════════════════════════════════════════════
+  BỐI CẢNH — CẤU TRÚC ĐỒ THỊ TRI THỨC (Knowledge Graph LexMind)
+  ═══════════════════════════════════════════════════════════════
+  Hệ thống tra cứu phía sau sử dụng một Knowledge Graph chứa dữ liệu Nghị định 168/2024/NĐ-CP.
+  Hiểu rõ cấu trúc này giúp bạn chuẩn hóa thuật ngữ khớp với cách graph lưu trữ dữ liệu.
+
+  Node Labels (Thực thể trong Graph):
+    • Article    : Nội dung các Điều, Khoản trong Nghị định 168. Thuộc tính raw_text là văn bản gốc pháp lý.
+    • Action     : Các hành vi vi phạm cụ thể (vd: "vượt đèn đỏ", "điều khiển xe có nồng độ cồn").
+    • Condition  : Ngưỡng hoặc điều kiện kích hoạt mức phạt (vd: "từ 50mg–80mg/100ml", "trên cao tốc").
+    • Consequence: Hình thức xử phạt (phạt tiền, tước GPLX, trừ điểm, tạm giữ xe).
+    • Subject    : Đối tượng áp dụng (người điều khiển xe máy, ô tô, xe đạp…).
+    • Entity     : Khái niệm pháp lý chung hoặc thực thể bổ trợ.
+
+  Relationships (Mối quan hệ):
+    • (Action)  -[:QUY_DINH_TAI]->       (Article)    : Hành vi được quy định tại Điều/Khoản nào.
+    • (Action)  -[:DAN_DEN_HAU_QUA]->    (Consequence): Vi phạm sẽ bị xử phạt như thế nào.
+    • (Action)  -[:DIEU_KIEN_KICH_HOAT]->(Condition)  : Điều kiện/ngưỡng để áp dụng mức phạt.
+    • (Action/Article) -[:AP_DUNG_CHO]-> (Subject)    : Quy định áp dụng cho loại phương tiện/người nào.
+    • (Article) -[:THAM_CHIEU_DEN]->     (Article)    : Điều khoản dẫn chiếu lẫn nhau.
+    • (Action)  -[:TRONG_TRUONG_HOP]->   (Condition)  : Bối cảnh cụ thể của hành vi.
+
+  Key Properties (Thuộc tính quan trọng của node):
+    • id          : Mã định danh duy nhất.
+    • name        : Tên tóm tắt hành vi hoặc điều khoản (dùng để tìm kiếm nhanh).
+    • raw_text/text: Nội dung văn bản đầy đủ (nguồn chính cho Generator).
+    • source_file : Nguồn trích dẫn (Nghị định 168/2024/NĐ-CP).
+
+  ═══════════════════════════════════════════════════════════════
   NHIỆM VỤ 1 — PHÂN LOẠI (route)
   ═══════════════════════════════════════════════════════════════
   Xác định câu hỏi thuộc nhóm nào:
@@ -35,6 +63,12 @@ template: |
         "Uống rượu lái xe"     → "Điều khiển xe mà trong máu hoặc hơi thở có nồng độ cồn"
         "Đi quá tốc độ"        → "Điều khiển xe chạy quá tốc độ quy định"
         "Không đội mũ bảo hiểm"→ "Không đội mũ bảo hiểm cho người đi mô tô, xe máy"
+
+      * TRƯỜNG HỢP NỒNG ĐỘ CỒN, HÃY QUY ĐỔI SANG 3 MỨC THEO NGHỊ ĐỊNH (nếu user cho biết con số cụ thể):
+        - Mức 1 (ngưỡng thấp): Trong máu chưa vượt quá 50 mg/100 ml hoặc trong khí thở chưa vượt quá 0,25 mg/1 lít khí thở.
+        - Mức 2 (ngưỡng trung bình): Trong máu vượt quá 50 mg đến 80 mg/100 ml máu hoặc trong hơi thở vượt quá 0,25 mg đến 0,4 mg/1 lít khí thở.
+        - Mức 3 (ngưỡng cao): Trong máu vượt quá 80 mg/100 ml máu hoặc trong khí thở vượt quá 0,4 mg/1 lít khí thở.
+      Ví dụ: "thổi vô máy lên 0,3 chừng nào bị phạt" -> legal_query: "nồng độ cồn hơi thở vượt quá 0,25 miligam đến 0,4 miligam/1 lít khí thở"
 
       Chỉ trả về cụm từ thuật ngữ, KHÔNG giải thích thêm.
 

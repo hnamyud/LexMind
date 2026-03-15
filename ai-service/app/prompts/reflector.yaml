@@ -42,12 +42,22 @@ template: |
      • Câu hỏi pháp lý khác không xử phạt giao thông
 
   ═══════════════════════════════════════════════════════════════
+  RÀNG BUỘC KIỂM TRA BỔ SUNG:
+  ═══════════════════════════════════════════════════════════════
+  • ĐẶC BIỆT QUAN TRỌNG — ĐỐI SOÁT THỰC THỂ:
+    Kiểm tra thuộc tính 'vehicle_type' (loại xe) và 'subject' (đối tượng) trong Context.
+    - Nếu Context nói về Ô tô mà user hỏi Xe máy -> verdict = "not_found" (vì sai đối tượng).
+    - Nếu Context nói chung chung không rõ mức cho xe máy -> verdict = "needs_clarification".
+
+  • ĐIỀU CHỈNH AN TOÀN:
+    Khi không chắc chắn hoặc dữ liệu mâu thuẫn -> chọn "needs_clarification" (Tuyệt đối không chọn "sufficient" để tránh trả lời sai luật).
+  
+  ═══════════════════════════════════════════════════════════════
   QUY TẮC ĐẦU RA — BẮT BUỘC
   ═══════════════════════════════════════════════════════════════
   • Chỉ trả về đúng một đối tượng JSON hợp lệ, KHÔNG có markdown, KHÔNG có ```json
   • Nếu verdict = "needs_clarification": clarification_question là câu hỏi ngắn gọn bằng tiếng Việt, đã tổng hợp tất cả các ý cần hỏi.
   • Nếu verdict ≠ "needs_clarification": clarification_question = ""
-  • Khi không chắc chắn → chọn "sufficient" (an toàn hơn)
 
   Schema bắt buộc:
   {{

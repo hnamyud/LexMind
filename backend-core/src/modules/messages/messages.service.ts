@@ -60,6 +60,7 @@ export class MessagesService {
                 content: true,
                 sender: true,
                 thought: true,
+                metadata: true,
                 createdAt: true,
             }
         });

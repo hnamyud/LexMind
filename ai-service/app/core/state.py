@@ -20,3 +20,6 @@ class RAGState(TypedDict):
     # ── Step 3: Reflector output ──────────────────────────────────────────────
     reflection: str              # "sufficient" | "needs_clarification" | "not_found"
     clarification_question: str  # câu hỏi ngược lại cho user (nếu needs_clarification)
+
+    # ── Web sources (khi dùng web search fallback) ────────────────────────────
+    web_sources: List[dict]      # [{url, title}, ...] — nguồn web đã tham khảo

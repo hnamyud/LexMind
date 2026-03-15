@@ -456,6 +456,53 @@ class WebSearchTool(BaseTool):
 
         return _format_results(candidates, scraped)
 
+    async def _execute_with_sources(self, query: str, num: int) -> tuple[str, list[dict]]:
+        """
+        Giống _execute nhưng trả thêm danh sách nguồn web đã tham khảo.
+        Returns: (formatted_text, [{"url": ..., "title": ...}, ...])
+        """
+        if not self.serper_api_key:
+            return "Lỗi: Chưa cấu hình SERPER_API_KEY.", []
+
+        candidates = await _collect_candidates(
+            api_key=self.serper_api_key,
+            query=query,
+            num=num,
+            gl=self.gl,
+            hl=self.hl,
+        )
+
+        if not candidates:
+            return "Không tìm thấy kết quả từ các nguồn pháp lý.", []
+
+        scraper = self._scraper()
+        if scraper:
+            urls = [c["url"] for c in candidates]
+            scraped = await scraper.scrape_many(urls)
+            success = sum(1 for s in scraped if s)
+            logger.info(
+                f"[WebSearch] Firecrawl: {success}/{len(urls)} trang OK | "
+                f"query='{query[:50]}'"
+            )
+        else:
+            scraped = [None] * len(candidates)
+            logger.info("[WebSearch] Firecrawl chưa cấu hình -> dùng Serper snippet.")
+
+        # Trích xuất danh sách nguồn (chỉ những trang có nội dung thực sự)
+        sources = [
+            {"url": c["url"], "title": c.get("title", "")}
+            for c, s in zip(candidates, scraped)
+            if s  # chỉ lấy nguồn thực sự scrape được nội dung
+        ]
+        # Nếu không trang nào scrape được (toàn dùng snippet), vẫn lấy tất cả candidates
+        if not sources:
+            sources = [
+                {"url": c["url"], "title": c.get("title", "")}
+                for c in candidates
+            ]
+
+        return _format_results(candidates, scraped), sources
+
     # ------------------------------------------------------------------
     # LangChain interface
     # ------------------------------------------------------------------

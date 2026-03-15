@@ -1,5 +1,6 @@
 import logging
 
+import neo4j
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
@@ -77,6 +78,53 @@ async def debug_info(request: Request):
             else None
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# Graph endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/law-detail/{node_id}", tags=["Graph"])
+async def get_law_detail(node_id: str, request: Request):
+    """Tra cứu chi tiết một node (điều luật, hành vi...) trong đồ thị Neo4j qua ID."""
+    svc = _get_service(request)
+    if not svc._driver:
+        raise HTTPException(status_code=503, detail="Cơ sở dữ liệu đồ thị chưa được kết nối.")
+    
+    # Truy vấn lấy properties của node, labels và các node liên quan (1-hop)
+    query = """
+    MATCH (start {id: $nodeId})-[:QUY_DINH_TAI|THUOC*0..]->(p)
+    RETURN collect(p) AS hierarchy
+    """
+    
+    try:
+        async with svc._driver.session(
+            database="neo4j",
+            default_access_mode=neo4j.READ_ACCESS,
+        ) as session:
+            result = await session.run(query, nodeId=node_id)
+            records = await result.data()
+            
+        if not records or not records[0].get("hierarchy"):
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy node với id: {node_id}")
+            
+        # Loại bỏ embedding khỏi từng node trong hierarchy
+        hierarchy = []
+        for node in records[0]["hierarchy"]:
+            props = dict(node)
+            props.pop("embedding", None)
+            hierarchy.append(props)
+
+        return {
+            "status": "success",
+            "data": hierarchy
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logging.error(f"Lỗi khi lấy chi tiết node {node_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi truy vấn đồ thị: {str(e)}")
 
 
 # ---------------------------------------------------------------------------

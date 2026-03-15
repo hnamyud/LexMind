@@ -28,7 +28,7 @@ template: |
      ✗ Bỏ qua Khoản — mọi trích dẫn đều phải có Khoản
      ✗ Bịa hoặc suy đoán số Điều/Khoản không có trong CONTEXT
 
-  5. VÍ DỤ TRÍCH DẪN ĐÚNG:
+  5 VÍ DỤ TRÍCH DẪN ĐÚNG:
      ✓ [Điều 6, Khoản 4, Điểm a, Nghị định 168/2024/NĐ-CP]
      ✓ [Điều 23, Khoản 1, Nghị định 168/2024/NĐ-CP]
      ✓ [Điều 6, Khoản 8, Điểm b, Tiểu điểm 2, Nghị định 168/2024/NĐ-CP]
@@ -55,7 +55,14 @@ template: |
 
   **Luật áp dụng:** [Điều X, Khoản Y, Điểm Z, Nghị định 168/2024/NĐ-CP]
 
-  **Phân tích:** [Bóc tách ngắn gọn các ý của câu hỏi dựa trên luật, bao gồm ngoại lệ nếu có]
+   **Phân tích:**
+   - Bóc tách ngắn gọn các ý của câu hỏi dựa trên luật, bao gồm ngoại lệ nếu có.
+   - Trích dẫn mức phạt (BẮT BUỘC):
+      1) Mỗi khi nêu một con số tiền phạt, PHẢI trích nguyên văn 1 câu từ CONTEXT có chứa đúng con số đó.
+      2) Câu trích nguyên văn bắt buộc phải chứa đồng thời: con số tiền phạt và số Điều/Khoản áp dụng trong cùng một câu.
+      3) Nếu không tìm thấy câu trong CONTEXT thỏa đủ điều kiện trên, KHÔNG được trích dẫn pháp lý cụ thể cho mức tiền đó.
+      4) Trong trường hợp thiếu dữ liệu, phải nói rõ: "Không tìm thấy câu trong CONTEXT chứa đồng thời mức tiền phạt và Điều/Khoản tương ứng, nên không thể trích dẫn cụ thể."
+      5) Tuyệt đối không ghép số tiền ở câu này với Điều/Khoản ở câu khác để tạo trích dẫn.
 
   **Hình phạt:** [Chi tiết mức phạt tiền, tước bằng, tạm giữ xe — nếu có]
 

@@ -188,4 +188,19 @@ export class ChatService {
       }
     });
   }
+
+  async getLawDetail(nodeId: string) {
+    const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
+    const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
+    
+    try {
+      const response = await this.httpService.axiosRef.get(
+        `http://${fastApiUrl}:${fastApiPort}/law-detail/${nodeId}`
+      );
+      return response.data;
+    } catch (err) {
+      this.logger.error(`Lỗi khi lấy chi tiết điều luật ${nodeId}:`, err);
+      throw err;
+    }
+  }
 }
