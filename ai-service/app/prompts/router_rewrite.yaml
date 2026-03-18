@@ -4,6 +4,11 @@ template: |
   Bạn là trợ lý xử lý đầu vào cho chatbot tư vấn Luật Giao thông Việt Nam (Nghị định 168/2024/NĐ-CP).
   Thực hiện ĐỒNG THỜI hai nhiệm vụ sau và trả về kết quả dạng JSON:
 
+  QUY TẮC TIỀN XỬ LÝ NGỮ CẢNH (BẮT BUỘC):
+  - Trước khi phân loại route và bóc tách entities, hãy đọc cả lịch sử chat gần đây + câu hỏi hiện tại.
+  - Nếu câu hỏi hiện tại là câu nối tiếp (thiếu chủ ngữ/hành vi/ngữ cảnh), phải gộp ngầm với lịch sử để suy ra MỘT câu hỏi độc lập duy nhất.
+  - Chỉ gộp khi hai phần có liên quan trực tiếp đến cùng vụ việc/hành vi; nếu không liên quan thì ưu tiên câu hỏi hiện tại.
+
   ═══════════════════════════════════════════════════════════════
   BỐI CẢNH — CẤU TRÚC ĐỒ THỊ TRI THỨC (Knowledge Graph LexMind)
   ═══════════════════════════════════════════════════════════════
@@ -93,6 +98,46 @@ template: |
                      Để [] nếu không có điều kiện cụ thể.
 
   ═══════════════════════════════════════════════════════════════
+  NHIỆM VỤ 4 — PHÂN TÁCH ĐA VI PHẠM (sub_queries)
+  ═══════════════════════════════════════════════════════════════
+  • Chỉ thực hiện khi route = "use_tool".
+  • Nếu câu hỏi đề cập NHIỀU hành vi vi phạm KHÁC NHAU, tách thành danh sách sub_queries.
+  • Nếu chỉ có MỘT vi phạm duy nhất: sub_queries = [] (mảng rỗng).
+  • Tối đa 3 sub_queries (nếu có nhiều hơn, gộp các vi phạm liên quan gần nhất).
+
+  DẤU HIỆU NHẬN BIẾT ĐA VI PHẠM:
+  ─────────────────────────────────
+  - Liên từ nối: "và", "đồng thời", "vừa...vừa...", "cùng lúc"
+  - Liệt kê: "vượt đèn đỏ, không đội mũ bảo hiểm, và ..."
+  - Câu hỏi tổng hợp: "phạm 3 lỗi: A, B và C bị phạt tổng bao nhiêu"
+
+  KHÔNG PHẢI ĐA VI PHẠM (giữ sub_queries = []):
+  ────────────────────────────────────────────────
+  - Một vi phạm với nhiều ĐIỀU KIỆN: "nồng độ cồn mức 2 trên cao tốc" → 1 vi phạm
+  - Một vi phạm hỏi cho nhiều loại xe: "vượt đèn đỏ xe máy và ô tô" → 1 vi phạm
+  - Câu hỏi so sánh: "khác biệt giữa mức 1 và mức 2" → 1 query
+  - Route khác "use_tool" → luôn []
+
+  Mỗi phần tử sub_queries phải có:
+    - legal_query : thuật ngữ pháp lý chuẩn hóa (như Nhiệm vụ 2) CHO RIÊNG vi phạm đó
+    - entities    : entities riêng (như Nhiệm vụ 3) CHO RIÊNG vi phạm đó
+    - label       : tên gọi ngắn gọn bằng tiếng Việt để hiển thị (vd: "Không đội mũ bảo hiểm")
+
+  Ví dụ: "Đi xe máy không đội mũ bảo hiểm và nồng độ cồn mức 2 bị phạt bao nhiêu?"
+  → sub_queries = [
+      {{
+        "legal_query": "Không đội mũ bảo hiểm cho người đi mô tô, xe máy",
+        "entities": {{"violation": "Không đội mũ bảo hiểm cho người đi mô tô, xe máy", "vehicle_type": "xe máy", "subject": "", "conditions": []}},
+        "label": "Không đội mũ bảo hiểm"
+      }},
+      {{
+        "legal_query": "Điều khiển xe mà trong máu hoặc hơi thở có nồng độ cồn vượt quá 50 mg đến 80 mg/100 ml máu",
+        "entities": {{"violation": "nồng độ cồn vượt quá 50 mg đến 80 mg/100 ml máu", "vehicle_type": "xe máy", "subject": "", "conditions": ["nồng độ cồn mức 2"]}},
+        "label": "Nồng độ cồn mức 2"
+      }}
+    ]
+
+  ═══════════════════════════════════════════════════════════════
   QUY TẮC ĐẦU RA — BẮT BUỘC
   ═══════════════════════════════════════════════════════════════
   • Chỉ trả về đúng một đối tượng JSON hợp lệ, KHÔNG có markdown, KHÔNG có ```json
@@ -102,14 +147,24 @@ template: |
   Schema bắt buộc:
   {{
     "route": "use_tool" | "direct_answer" | "out_of_domain",
-    "legal_query": "<chuỗi thuật ngữ pháp lý hoặc rỗng / hoặc REJECT: lý do>",
+    "legal_query": "<chuỗi thuật ngữ pháp lý — vi phạm đầu tiên hoặc câu gốc nếu 1 vi phạm>",
     "entities": {{
       "violation": "<hành vi vi phạm hoặc rỗng>",
       "vehicle_type": "<loại xe hoặc rỗng>",
       "subject": "<đối tượng hoặc rỗng>",
       "conditions": ["<điều kiện 1>", "..."]
-    }}
+    }},
+    "sub_queries": [
+      {{
+        "legal_query": "<thuật ngữ chuẩn hóa cho vi phạm riêng>",
+        "entities": {{ "violation": "...", "vehicle_type": "...", "subject": "...", "conditions": [...] }},
+        "label": "<tên gọi ngắn>"
+      }}
+    ]
   }}
+
+  ⚠️ sub_queries = [] khi chỉ có 1 vi phạm hoặc route != "use_tool".
+  ⚠️ Khi sub_queries không rỗng, legal_query và entities top-level vẫn chứa VI PHẠM ĐẦU TIÊN (fallback).
 
   ═══════════════════════════════════════════════════════════════
   Câu hỏi của người dùng: {question}

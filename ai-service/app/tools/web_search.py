@@ -257,7 +257,8 @@ class _FirecrawlScraper:
 
 def _build_site_query(query: str, sites: list[str]) -> str:
     """Tạo query với `site:` operator để giới hạn domain."""
-    return f"{query} {' OR '.join(f'site:{s}' for s in sites)}"
+    # Bọc nhóm site trong ngoặc để tránh lệch ưu tiên toán tử OR.
+    return f"{query} ({' OR '.join(f'site:{s}' for s in sites)})"
 
 
 def _domain_of(url: str) -> str:
@@ -265,6 +266,23 @@ def _domain_of(url: str) -> str:
         return urlparse(url).hostname or url
     except Exception:
         return url
+
+
+def _normalize_host(host: str) -> str:
+    host = (host or "").strip().lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _is_allowed_domain(url: str, allowed_sites: list[str]) -> bool:
+    host = _normalize_host(_domain_of(url))
+    if not host:
+        return False
+
+    for site in allowed_sites:
+        normalized_site = _normalize_host(site)
+        if host == normalized_site or host.endswith(f".{normalized_site}"):
+            return True
+    return False
 
 
 async def _serper_fetch(
@@ -321,11 +339,16 @@ async def _collect_candidates(
     # ── Merge theo ưu tiên ────────────────────────────────────────────
     seen: set[str] = set()
     candidates: list[dict] = []
+    allowed_sites = [*_TIER1_SITES, *_TIER2_SITES]
 
     def _add(items: list[dict], tier: int):
         for item in items:
             url = item.get("link", "")
             if not url or url in seen:
+                continue
+            # Chốt filter cứng theo allowlist domain để tránh rò rỉ nguồn ngoài.
+            if not _is_allowed_domain(url, allowed_sites):
+                logger.info(f"[Serper] Bỏ URL ngoài allowlist: {url}")
                 continue
             seen.add(url)
             candidates.append({

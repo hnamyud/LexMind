@@ -1,9 +1,14 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Response } from 'express';
 import { MessagesService } from '../messages/messages.service';
 import { ConversationsService } from '../conversations/conversations.service';
+import {
+  CONVERSATION_TITLE_EVENT,
+  ConversationTitleEvent,
+} from './events/conversation-title.event';
 
 @Injectable()
 export class ChatService {
@@ -14,6 +19,7 @@ export class ChatService {
     private messageService: MessagesService,
     private conversationService: ConversationsService,
     private readonly configService: ConfigService,
+    private readonly eventEmitter: EventEmitter2,
   ) { }
 
   async askAI(question: string, conversationId: string, res: Response) {
@@ -164,9 +170,20 @@ export class ChatService {
           metadata,
         });
         this.logger.log(`[streamAI] Đã lưu bot message — conv: ${conversation_id}`);
-        
+
         // Trả về ID của bot message vừa tạo
         res.write(`data: ${JSON.stringify({ type: 'message_id', messageId: botMsg.id })}\n\n`);
+
+        // ━━ Sinh title bất đồng bộ sau khi bot trả lời lần đầu ━━
+        // Đếm tổng số messages — chỉ emit khi đây là bot message đầu tiên (tổng = 2)
+        const messageCount = await this.messageService.countMessages(conversation_id);
+        if (messageCount === 2 && fullResponse.trim()) {
+          this.eventEmitter.emit(
+            CONVERSATION_TITLE_EVENT,
+            new ConversationTitleEvent(conversation_id, question, fullResponse),
+          );
+          this.logger.log(`[streamAI] Đã emit sự kiện sinh tiêu đề cho conv: ${conversation_id}`);
+        }
       } catch (err) {
         this.logger.error('Lỗi lưu bot message vào DB:', err);
       }

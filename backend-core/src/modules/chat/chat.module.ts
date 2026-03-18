@@ -5,6 +5,7 @@ import { ChatController } from './chat.controller';
 import { PrismaModule } from 'prisma/prisma.module';
 import { MessagesModule } from '../messages/messages.module';
 import { ConversationsModule } from '../conversations/conversations.module';
+import { TitleGeneratorService } from './title-generator.service';
 
 @Module({
   imports: [
@@ -14,6 +15,6 @@ import { ConversationsModule } from '../conversations/conversations.module';
     HttpModule
   ],
   controllers: [ChatController],
-  providers: [ChatService]
+  providers: [ChatService, TitleGeneratorService]
 })
 export class ChatModule { }

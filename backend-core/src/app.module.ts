@@ -1,5 +1,6 @@
 import { MiddlewareConsumer, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ConversationsModule } from './modules/conversations/conversations.module';
@@ -21,6 +22,7 @@ import { APP_GUARD } from '@nestjs/core';
   imports: [
     CaslModule,
     FeedbacksModule,
+    EventEmitterModule.forRoot(), // Global event bus — fire-and-forget pattern
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '../.env', // Root .env dùng chung với ai-service

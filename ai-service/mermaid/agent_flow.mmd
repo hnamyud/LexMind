@@ -1,0 +1,49 @@
+%% Agent flow for ai-service/app/services/rag_service.py
+%% Render with Mermaid (flowchart)
+flowchart TD
+    START([Start: ask_stream(question, conversation_id)]) --> RR["router_rewrite\nStep 1\nroute + legal_query + entities"]
+
+    RR -->|route == direct_answer| AD["agent_direct\nLLM direct response"]
+    RR -->|route == out_of_domain| AR["agent_reject\nReject response"]
+    RR -->|otherwise use_tool| RET["retriever\nStep 2\nNeo4j graph retrieval"]
+
+    AD --> END1([End])
+    AR --> END2([End])
+
+    RET --> REF["reflector\nStep 3\nverdict: sufficient / needs_clarification / not_found"]
+
+    REF -->|sufficient| GEN["generator\nStep 4\nSynthesize final answer"]
+    REF -->|needs_clarification| CLA["clarifier\nAsk follow-up question"]
+    REF -->|not_found| WEB["web_search_fallback\nSearch web sources"]
+
+    WEB --> GEN
+    CLA --> END3([End])
+    GEN --> END4([End])
+
+    %% Streaming behavior emitted by ask_stream
+    subgraph STREAMING[Streaming outputs]
+      P1["process events\n(on_chain_start)"]
+      P2["thinking + answer chunks\n(on_chat_model_stream)"]
+      P3["metadata sources"]
+      P4["done"]
+    end
+
+    RR -. emits .-> P1
+    RET -. emits .-> P1
+    REF -. emits .-> P1
+    WEB -. emits .-> P1
+    GEN -. emits .-> P1
+    AD -. emits .-> P1
+    AR -. emits .-> P1
+
+    GEN -. streams .-> P2
+    AD -. streams .-> P2
+
+    END4 -. finalize .-> P3
+    END4 -. finalize .-> P4
+    END3 -. finalize .-> P3
+    END3 -. finalize .-> P4
+    END2 -. finalize .-> P3
+    END2 -. finalize .-> P4
+    END1 -. finalize .-> P3
+    END1 -. finalize .-> P4

@@ -97,4 +97,11 @@ export class MessagesService {
         }
         return message;
     }
+
+    /** Đếm số lượng messages trong một conversation (dùng để xác định lần trả lời đầu tiên) */
+    async countMessages(conversationId: string): Promise<number> {
+        return this.prisma.message.count({
+            where: { conversationId },
+        });
+    }
 }

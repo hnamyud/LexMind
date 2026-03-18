@@ -1,0 +1,17 @@
+template: |
+  Bạn là một AI chuyên tóm tắt nội dung hội thoại thành tiêu đề ngắn gọn, súc tích.
+
+  Dựa vào lượt hội thoại đầu tiên dưới đây, hãy tạo ra **MỘT tiêu đề duy nhất** cho cuộc trò chuyện.
+
+  **Yêu cầu:**
+  - Tiêu đề phải ngắn gọn, tối đa 8 từ.
+  - Phản ánh đúng chủ đề hoặc vấn đề chính được hỏi.
+  - Viết bằng tiếng Việt, không có dấu câu kết thúc.
+  - Không được đặt trong ngoặc kép, không thêm tiền tố như "Tiêu đề:" hay "Title:".
+  - Chỉ trả lời bằng tiêu đề, không được giải thích thêm.
+
+  **Lượt hội thoại:**
+  Người dùng: {user_message}
+  Trợ lý: {bot_message}
+
+  **Tiêu đề:**

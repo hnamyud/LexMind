@@ -28,40 +28,385 @@ template: |
      • Có mức phạt / điều kiện tước bằng / tạm giữ xe rõ ràng
      • Không cần thêm thông tin từ người dùng
 
-  B. "needs_clarification" — Context CÓ data nhưng cần thêm điều kiện từ user:
-     • Quy định có nhiều mức tùy theo con số cụ thể (vd: quá bao nhiêu %, chở quá bao nhiêu người)
-     • Context đã tìm được điều khoản, nhưng thiếu tham số để xác định đúng mức phạt
-     • Ví dụ: Phạt tải trọng quá giới hạn → cần biết "quá bao nhiêu %"
-     • Ví dụ: Phạt chở người quá quy định → cần biết "chở quá bao nhiêu người"
-     ⚠️ Chỉ dùng khi context ĐÃ tìm được điều khoản nhưng thiếu tham số điều kiện.
-     🚨 QUAN TRỌNG: Nếu nhận thấy Graph thiếu nhiều dữ kiện để kết luận (ví dụ: thiếu loại xe, thiết hành vi vi phạm cụ thể, thiếu điều kiện người lái), KHÔNG ĐƯỢC hỏi từng câu lắt nhắt. Hãy tổng hợp và hỏi người dùng TẤT CẢ các thông tin còn thiếu trong đúng 1 lượt phản hồi.
+  B. "needs_clarification" — CHỈ dùng khi tham số còn thiếu tạo ra MỨC PHẠT TIỀN KHÁC NHAU ĐÁNG KỂ:
+     • Ví dụ ĐỦ ĐIỀU KIỆN hỏi: Tải trọng quá giới hạn → mức phạt khác nhau theo % vượt (20%, 50%, 100%...)
+     • Ví dụ ĐỦ ĐIỀU KIỆN hỏi: Nồng độ cồn chưa rõ mức → mức phạt rất khác nhau theo từng ngưỡng
+     ❌ KHÔNG được hỏi về: loại xe (nếu có thể trả lời cho tất cả), bằng lái không rõ hạng, tai nạn có xảy ra không, người ngồi sau có đội mũ không — những điều này chỉ là tình tiết tăng nặng, không phải điều kiện xác định hành vi vi phạm chính.
+     ❌ KHÔNG dùng verdict này khi đã có đủ mức phạt cho hành vi vi phạm chính, dù thiếu điều kiện phụ.
+     ⚠️ Nếu phải hỏi: chỉ 1 lượt, tổng hợp TẤT CẢ câu hỏi còn thiếu trong 1 câu duy nhất.
 
   C. "not_found" — Không tìm thấy trong đồ thị tri thức:
      • Context trả về rỗng hoặc chứa thông báo "không tìm thấy" / "ngoài phạm vi"
      • Hành vi không thuộc phạm vi Nghị định 168/2024/NĐ-CP (vd: thủ tục đăng ký xe, bảo hiểm, v.v.)
      • Câu hỏi pháp lý khác không xử phạt giao thông
+     🔒 KHÓA CỨNG: Nếu context chứa BẤT KỲ từ khóa nào dưới đây → TUYỆT ĐỐI không được chọn "not_found":
+        → "phạt tiền", "triệu đồng", "nghìn đồng"
+        → "tước quyền sử dụng giấy phép", "tước bằng"
+        → "tạm giữ phương tiện", "tạm giữ xe"
+        → "trừ điểm", "điểm giấy phép lái xe"
+        → "cảnh cáo"
+        Khi gặp các từ khóa này → verdict phải là "sufficient" (hoặc "needs_clarification" nếu thỏa điều kiện B).
+
+  ═══════════════════════════════════════════════════════════════
+  D. ENTITY CONTRASTIVE ANALYSIS (Phân tích Đối nghịch Thực thể)
+  ═══════════════════════════════════════════════════════════════
+
+  NGUYÊN TẮC CỐT LÕI: Thay vì so khớp từ khóa, hãy BÓC TÁCH và ĐỐI CHIẾU
+  các thuộc tính pháp lý cốt lõi giữa CÂU HỎI và CONTEXT.
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  BƯỚC 1: BÓC TÁCH THUỘC TÍNH TỪ CÂU HỎI                    │
+  └─────────────────────────────────────────────────────────────┘
+  Xác định 4 thành phần cốt lõi trong câu hỏi của User:
+
+  • AGENT (Tác nhân điều khiển):
+    - Con người? AI/Phần mềm? Hệ thống tự động? Không xác định?
+    - VD: "tôi lái xe" → Agent = Con người
+    - VD: "xe tự lái" → Agent = AI/Phần mềm
+    - VD: "xe không người lái" → Agent = Không có (vắng mặt)
+
+  • SUBJECT (Chủ thể chịu trách nhiệm pháp lý):
+    - Cá nhân? Pháp nhân? Chủ sở hữu? Không xác định?
+    - VD: "tôi bị phạt" → Subject = Cá nhân (người điều khiển)
+    - VD: "công ty vận tải" → Subject = Pháp nhân
+
+  • OBJECT (Phương tiện/Đối tượng):
+    - Loại xe: Ô tô, xe máy, xe đạp, xe đạp điện, xe máy điện?
+    - Đặc tính: Tự lái, có người lái, hybrid, điện, xăng?
+    - VD: "xe máy điện" → Object = Xe máy điện (phân loại đặc biệt)
+
+  • ACTION (Hành vi vi phạm):
+    - Hành vi cụ thể: vượt đèn đỏ, chạy quá tốc độ, nồng độ cồn?
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  BƯỚC 2: BÓC TÁCH TIỀN ĐỀ TỪ CONTEXT                       │
+  └─────────────────────────────────────────────────────────────┘
+  Xác định các TIỀN ĐỀ NGẦM ĐỊNH trong quy định pháp luật:
+
+  • AGENT_PREMISE (Tiền đề về tác nhân):
+    - Context nói "người điều khiển" → Tiền đề = Con người
+    - Context nói "chủ xe" → Tiền đề = Chủ sở hữu (có thể là pháp nhân)
+
+  • SUBJECT_PREMISE (Tiền đề về chủ thể):
+    - Ai là người chịu trách nhiệm theo quy định?
+
+  • OBJECT_PREMISE (Tiền đề về phương tiện):
+    - Context quy định cho loại xe nào? Có bao gồm xe đặc biệt không?
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  BƯỚC 3: GRAPH EXHAUSTION CHECK (Kiểm tra đã khai thác hết)│
+  └─────────────────────────────────────────────────────────────┘
+
+  ⚠️ CHI PHÍ WEB SEARCH RẤT CAO - CHỈ SỬ DỤNG KHI THỰC SỰ CẦN!
+  Graph database có 2300+ nodes và 4800+ relationships về Nghị định 168/2024.
+  Hầu hết câu hỏi ĐỀU CÓ CÂU TRẢ LỜI trong Graph nếu phân tích đúng.
+
+  TRƯỚC KHI TRIGGER WEB SEARCH, BẠN PHẢI TRẢ LỜI CÁC CÂU HỎI SAU:
+
+  ❓ Context có HOÀN TOÀN RỖNG không?
+     → Nếu KHÔNG (có ít nhất 1 block "--- Nguồn ---") → trigger_search = false
+
+  ❓ Context có chứa mức phạt cụ thể không?
+     → Nếu CÓ (bất kỳ số tiền nào) → trigger_search = false
+     → Để Generator xử lý với data hiện có
+
+  ❓ Context có cảnh báo "[LOW_CONFIDENCE_THRESHOLD]" không?
+     → Chỉ khi này mới xem xét trigger_search = true
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  PHÂN LOẠI MISMATCH - PHẢN ỨNG KHÁC NHAU                   │
+  └─────────────────────────────────────────────────────────────┘
+
+  🟡 VARIATION MISMATCH (Biến thể - KHÔNG cần web search):
+     • Câu hỏi: "Xe máy điện" / Context: "Xe máy"
+     • Câu hỏi: "Ô tô hybrid" / Context: "Ô tô"
+     • Câu hỏi: "Xe tải 3.5 tấn" / Context: "Xe tải"
+     → ĐÂY CHỈ LÀ BIẾN THỂ của loại xe chính, KHÔNG phải edge case
+     → Hành động: verdict = "sufficient" + trigger_search = FALSE
+     → Generator sẽ áp dụng quy định chung cho loại xe cha
+
+  🔴 PARADIGM MISMATCH (Nghịch lý bản chất - CÂN NHẮC web search):
+     • Câu hỏi: "Xe tự lái" (AI làm chủ, KHÔNG có người điều khiển)
+     • Context: "Người điều khiển phải chịu trách nhiệm"
+     → ĐÂY LÀ NGHỊCH LÝ BẢN CHẤT: Tiền đề bị phá vỡ hoàn toàn
+
+     NHƯNG vẫn phải kiểm tra:
+     - Context có ít nhất 1 mức phạt không? → Nếu CÓ: trigger_search = FALSE
+     - Context hoàn toàn rỗng? → Nếu KHÔNG: trigger_search = FALSE
+     - CHỈ KHI context rỗng HOẶC [LOW_CONFIDENCE] → trigger_search = TRUE
+
+  🟢 PERFECT MATCH (Khớp hoàn toàn):
+     • Tất cả thuộc tính khớp nhau
+     → Hành động: trigger_search = false
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  TRIGGER SEARCH - ĐIỀU KIỆN NGHIÊM NGẶT                    │
+  └─────────────────────────────────────────────────────────────┘
+
+  ⛔ CHỈ ĐẶT trigger_search = true KHI THỎA MÃN **TẤT CẢ** các điều kiện sau:
+
+  1. Context HOÀN TOÀN RỖNG (không có bất kỳ block "--- Nguồn ---" nào)
+     HOẶC
+     Context chứa cảnh báo "[LOW_CONFIDENCE_THRESHOLD]"
+
+  2. VÀ câu hỏi thuộc một trong các trường hợp:
+     • CÔNG NGHỆ MỚI HOÀN TOÀN: Xe tự lái, xe bay, drone giao hàng
+       (Không phải biến thể như xe máy điện, ô tô hybrid)
+
+     • CHÍNH SÁCH MỚI: User hỏi rõ ràng về "mới nhất 2024", "vừa cập nhật"
+       VÀ context không đề cập đến Nghị định 168/2024
+
+     • TÀI LIỆU NGOÀI PHẠM VI: Câu hỏi về luật khác hoàn toàn
+       (VD: Bảo hiểm, Đăng kiểm, Nghị định khác)
+
+  ⚠️ NẾU CONTEXT CÓ BẤT KỲ mức phạt nào → trigger_search = FALSE
+     Dù có PARADIGM MISMATCH, vẫn để Generator xử lý với data hiện có.
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  VÍ DỤ CỤ THỂ - KHI NÀO trigger_search = FALSE             │
+  └─────────────────────────────────────────────────────────────┘
+
+  ❌ Case: "Xe máy điện vượt đèn đỏ bị phạt bao nhiêu?"
+     Context: "Xe máy vượt đèn đỏ phạt 4-6 triệu"
+     → trigger_search = FALSE
+     Lý do: Xe máy điện VẪN là xe máy. Context có mức phạt rồi.
+
+  ❌ Case: "Chuyển hướng không nhường đường"
+     Context: "Phạt 4-6 triệu... (không có số Điều/Khoản)"
+     → trigger_search = FALSE
+     Lý do: Context có mức phạt. Generator sẽ trả lời dù thiếu dẫn chiếu.
+
+  ❌ Case: "Xe tự lái vượt đèn đỏ ai chịu trách nhiệm?"
+     Context: "Người điều khiển xe ô tô vượt đèn đỏ phạt 18-20 triệu"
+     → trigger_search = FALSE
+     Lý do: Dù có PARADIGM MISMATCH nhưng context đã có mức phạt.
+            Generator sẽ áp dụng Survival Rule xử lý như vùng xám.
+
+  ✅ Case: "Xe bay trên cao tốc bị phạt không?"
+     Context: "" (rỗng)
+     → trigger_search = TRUE
+     Lý do: Context rỗng + công nghệ hoàn toàn mới.
+
+  ✅ Case: "Vượt đèn đỏ..."
+     Context: "[LOW_CONFIDENCE_THRESHOLD] Kết quả tìm kiếm có độ tin cậy thấp..."
+     → trigger_search = TRUE
+     Lý do: Graph tự cảnh báo độ tin cậy thấp.
+
+  ⚠️ LƯU Ý QUAN TRỌNG:
+  - Nếu trigger_search = true → verdict vẫn có thể là "sufficient" (nếu có ít data)
+  - Hệ thống sẽ BỔ SUNG thêm kết quả từ Web để đảm bảo độ chính xác
+  - trigger_search = false (mặc định) khi KHÔNG có bất kỳ mismatch nào
+
 
   ═══════════════════════════════════════════════════════════════
   RÀNG BUỘC KIỂM TRA BỔ SUNG:
   ═══════════════════════════════════════════════════════════════
-  • ĐẶC BIỆT QUAN TRỌNG — ĐỐI SOÁT THỰC THỂ:
-    Kiểm tra thuộc tính 'vehicle_type' (loại xe) và 'subject' (đối tượng) trong Context.
-    - Nếu Context nói về Ô tô mà user hỏi Xe máy -> verdict = "not_found" (vì sai đối tượng).
-    - Nếu Context nói chung chung không rõ mức cho xe máy -> verdict = "needs_clarification".
+  • ĐỐI SOÁT THỰC THỂ (vehicle_type):
+    - Nếu context chỉ có dữ liệu cho Ô tô nhưng user hỏi Xe máy (không đề cập ô tô) → verdict = "not_found".
+    - Nếu vehicle_type rỗng (user không đề cập loại xe) nhưng context đã tìm được dữ liệu cho nhiều loại xe → verdict = "sufficient". Generator sẽ liệt kê cho từng loại xe.
+    - Nếu context có dữ liệu cho đúng loại xe mà user hỏi → verdict = "sufficient".
 
-  • ĐIỀU CHỈNH AN TOÀN:
-    Khi không chắc chắn hoặc dữ liệu mâu thuẫn -> chọn "needs_clarification" (Tuyệt đối không chọn "sufficient" để tránh trả lời sai luật).
+  • NGUYÊN TẮC ƯU TIÊN TRẢ LỜI:
+    Nếu context đã tìm thấy hành vi vi phạm chính kèm mức phạt → luôn chọn "sufficient", dù thiếu điều kiện phụ (như bằng lái hạng/loại, có gây tai nạn không, người sau có đội mũ không). Generator sẽ trả lời mức phạt đã biết và có thể ghi chú thêm về tình tiết tăng nặng.
+    Khi không chắc chắn → chọn "sufficient" và để Generator xử lý, KHÔNG chọn "needs_clarification".
   
+  ═══════════════════════════════════════════════════════════════
+  FEW-SHOT EXAMPLES (Học từ ví dụ)
+  ═══════════════════════════════════════════════════════════════
+
+  📌 EXAMPLE 1: Context có mức phạt → verdict = "sufficient"
+
+  Question: "Chuyển hướng không nhường đường cho xe đi ngược chiều bị phạt bao nhiêu?"
+  Context: "Phạt tiền từ 4.000.000 đồng đến 6.000.000 đồng đối với người điều khiển
+            xe ô tô có hành vi chuyển hướng không nhường đường cho xe đi ngược chiều.
+            Điều 6 Nghị định 168/2024/NĐ-CP"
+
+  ✅ ĐÚNG:
+  {{
+    "verdict": "sufficient",
+    "clarification_question": "",
+    "trigger_search": false
+  }}
+
+  ❌ SAI: Không được chọn "not_found" vì context có "phạt tiền" + "triệu đồng"
+
+  ---
+
+  📌 EXAMPLE 2: Context có nhiều mức phạt theo loại xe → verdict = "sufficient"
+
+  Question: "Vượt đèn đỏ bị phạt bao nhiêu?"
+  Context: "Xe ô tô: phạt 18-20 triệu. Xe máy: phạt 4-6 triệu. Điều 6, 7 NĐ 168/2024"
+
+  ✅ ĐÚNG:
+  {{
+    "verdict": "sufficient",
+    "clarification_question": "",
+    "trigger_search": false
+  }}
+
+  (Generator sẽ liệt kê mức phạt cho từng loại xe)
+
+  ---
+
+  📌 EXAMPLE 3: Xe tự lái (Paradigm Mismatch NHƯNG có data) → trigger_search = FALSE
+
+  Question: "Xe tự lái vượt đèn đỏ thì ai chịu trách nhiệm?"
+  Context: "Người điều khiển xe ô tô vượt đèn đỏ bị phạt 18-20 triệu đồng"
+  Entities: {{"vehicle_type": "ô tô", "violation": "vượt đèn đỏ", "technology": "tự lái"}}
+
+  ✅ ĐÚNG (áp dụng Graph Exhaustion Check):
+  - AGENT từ câu hỏi: AI/Tự động (xe tự lái)
+  - AGENT_PREMISE từ context: "Người điều khiển" (Con người)
+  - → PARADIGM MISMATCH phát hiện!
+
+  NHƯNG:
+  - Context CÓ mức phạt cụ thể: "18-20 triệu đồng"
+  - → trigger_search = FALSE (theo Graph Exhaustion Check)
+
+  {{
+    "verdict": "sufficient",
+    "clarification_question": "",
+    "trigger_search": false
+  }}
+
+  (Generator sẽ áp dụng Survival Rule và trả lời như vùng xám với data hiện có)
+
+  ---
+
+  📌 EXAMPLE 3B: Xe máy điện (Variation Mismatch) → trigger_search = FALSE
+
+  Question: "Xe máy điện vượt đèn đỏ bị phạt bao nhiêu?"
+  Context: "Xe máy vượt đèn đỏ bị phạt 4-6 triệu đồng. Điều 7 Nghị định 168/2024"
+  Entities: {{"vehicle_type": "xe máy", "feature": "điện", "violation": "vượt đèn đỏ"}}
+
+  ✅ ĐÚNG (áp dụng Variation Mismatch logic):
+  - OBJECT từ câu hỏi: Xe máy điện (biến thể)
+  - OBJECT_PREMISE từ context: "Xe máy" (loại xe cha)
+  - → VARIATION MISMATCH (chỉ là biến thể, KHÔNG phải edge case)
+
+  VÀ:
+  - Context CÓ mức phạt cụ thể: "4-6 triệu đồng"
+  - → trigger_search = FALSE
+
+  {{
+    "verdict": "sufficient",
+    "clarification_question": "",
+    "trigger_search": false
+  }}
+
+  (Xe máy điện VẪN là xe máy theo phân loại pháp luật. Generator sẽ áp dụng quy định chung.)
+
+  ---
+
+  📌 EXAMPLE 4: Thiếu tham số quan trọng → needs_clarification
+
+  Question: "Xe chở quá tải bị phạt bao nhiêu?"
+  Context: "Chở quá tải 10-20%: phạt X. Chở quá tải 20-50%: phạt Y. Quá 50%: phạt Z"
+
+  ✅ ĐÚNG:
+  {{
+    "verdict": "needs_clarification",
+    "clarification_question": "Bạn chở quá tải bao nhiêu phần trăm so với tải trọng cho phép?",
+    "trigger_search": false
+  }}
+
+  ---
+
+  📌 EXAMPLE 5: Thực sự không tìm thấy → not_found
+
+  Question: "Thủ tục đăng ký xe mới như thế nào?"
+  Context: "" (rỗng) hoặc "Không tìm thấy thông tin liên quan"
+
+  ✅ ĐÚNG:
+  {{
+    "verdict": "not_found",
+    "clarification_question": "",
+    "trigger_search": false
+  }}
+
+  (Vì câu hỏi không thuộc phạm vi xử phạt vi phạm hành chính)
+
+  ---
+
+  📌 EXAMPLE 6: Độ tin cậy thấp → trigger_search = TRUE (case hiếm)
+
+  Question: "Vi phạm [hành vi mới/phức tạp chưa được index tốt trong Graph]"
+  Context: "[LOW_CONFIDENCE_THRESHOLD] Kết quả tìm kiếm có độ tin cậy thấp.
+            Phạt tiền từ 2-3 triệu (tuy nhiên độ chính xác không được đảm bảo)"
+
+  ✅ ĐÚNG (áp dụng Graph Exhaustion Check):
+  - Context CÓ mức phạt NHƯNG Graph tự cảnh báo độ tin cậy thấp
+  - → trigger_search = TRUE (để bổ sung thêm từ web)
+
+  {{
+    "verdict": "sufficient",
+    "clarification_question": "",
+    "trigger_search": true
+  }}
+
+  (Đây là case HIẾM: Graph có data nhưng tự nhận không chắc chắn)
+
   ═══════════════════════════════════════════════════════════════
   QUY TẮC ĐẦU RA — BẮT BUỘC
   ═══════════════════════════════════════════════════════════════
+  ⚠️ ĐỌC KỸ CÁC VÍ DỤ Ở TRÊN TRƯỚC KHI TRẢ LỜI!
+
+  BEFORE OUTPUTTING JSON, YOU **MUST** FOLLOW THIS REASONING CHAIN:
+
+  Step 1: CHECK CONTEXT KEYWORDS (KHÓA CỨNG - dòng 42-48)
+  -------
+  Does context contain ANY of these keywords?
+  - "phạt tiền", "triệu đồng", "nghìn đồng"
+  - "tước quyền", "tước bằng"
+  - "tạm giữ phương tiện", "tạm giữ xe"
+  - "trừ điểm", "cảnh cáo"
+
+  → If YES: verdict CANNOT be "not_found" → Go to Step 2
+  → If NO: verdict = "not_found" → Output JSON and STOP
+
+  Step 2: GRAPH EXHAUSTION CHECK (Kiểm tra đã khai thác hết Graph)
+  -------
+  ⚠️ WEB SEARCH CHI PHÍ CAO - CHỈ DÙNG KHI THỰC SỰ CẦN!
+
+  Check these conditions IN ORDER:
+
+  a) Is context COMPLETELY EMPTY (no "--- Nguồn ---" blocks)?
+     → If NO (has at least 1 block): trigger_search = FALSE → Go to Step 3
+     → If YES (empty): continue to (b)
+
+  b) Does context contain "[LOW_CONFIDENCE_THRESHOLD]" warning?
+     → If YES: trigger_search = TRUE → Go to Step 3
+     → If NO: continue to (c)
+
+  c) Does context contain ANY penalty amount ("phạt tiền", numbers)?
+     → If YES: trigger_search = FALSE → Go to Step 3
+     → If NO: continue to (d)
+
+  d) Is this a PARADIGM MISMATCH case? (xe tự lái, xe bay, drone)
+     → If YES: trigger_search = TRUE
+     → If NO (just variation like xe máy điện): trigger_search = FALSE
+
+  SUMMARY RULE: trigger_search = TRUE only if:
+  - (Context empty OR [LOW_CONFIDENCE]) AND (Paradigm mismatch OR true edge case)
+  - Otherwise: trigger_search = FALSE
+
+  Step 3: CHECK IF CLARIFICATION NEEDED
+  -------
+  Does missing parameter cause SIGNIFICANTLY DIFFERENT penalty amounts?
+  - YES (e.g., overload 10% vs 50%) → verdict = "needs_clarification"
+  - NO → verdict = "sufficient"
+
+  Step 4: OUTPUT JSON
+  -------
   • Chỉ trả về đúng một đối tượng JSON hợp lệ, KHÔNG có markdown, KHÔNG có ```json
   • Nếu verdict = "needs_clarification": clarification_question là câu hỏi ngắn gọn bằng tiếng Việt, đã tổng hợp tất cả các ý cần hỏi.
   • Nếu verdict ≠ "needs_clarification": clarification_question = ""
+  • trigger_search: đặt true nếu phát hiện mismatch ở Step 2, false nếu không
 
   Schema bắt buộc:
   {{
     "verdict": "sufficient" | "needs_clarification" | "not_found",
-    "clarification_question": "<câu hỏi ngược lại cho user hoặc chuỗi rỗng>"
+    "clarification_question": "<câu hỏi ngược lại cho user hoặc chuỗi rỗng>",
+    "trigger_search": true | false
   }}
   ═══════════════════════════════════════════════════════════════

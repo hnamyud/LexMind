@@ -1,12 +1,16 @@
 import logging
+import yaml
+from pathlib import Path
 
 import neo4j
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
+from langchain_core.messages import HumanMessage as LCHumanMessage
 
 from app.core.config import settings
+from app.services.rag_service import _extract_ai_text
 
 router = APIRouter()
 
@@ -25,6 +29,11 @@ def verify_internal_secret(api_key: str = Depends(api_key_header)):
 class AskRequest(BaseModel):
     question: str
     conversation_id: str | None = None
+
+
+class GenerateTitleRequest(BaseModel):
+    user_message: str
+    bot_message: str
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +134,48 @@ async def get_law_detail(node_id: str, request: Request):
         import logging
         logging.error(f"Lỗi khi lấy chi tiết node {node_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Lỗi truy vấn đồ thị: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Conversation Title Generation
+# ---------------------------------------------------------------------------
+
+@router.post("/conversations/generate-title", tags=["Conversations"], dependencies=[Depends(verify_internal_secret)])
+async def generate_conversation_title(request: Request, body: GenerateTitleRequest):
+    """
+    Dùng LLM router (model nhẹ) để sinh tiêu đề ngắn gọn cho conversation
+    từ cặp user_message + bot_message đầu tiên.
+    Được gọi bất đồng bộ từ NestJS — không block luồng chat của user.
+    """
+    svc = _get_service(request)
+    if not svc._llm_router:
+        raise HTTPException(status_code=503, detail="LLM router chưa được khởi tạo.")
+
+    prompt_path = Path(__file__).parent.parent / "prompts" / "title_generator.yaml"
+    try:
+        with open(prompt_path, encoding="utf-8") as f:
+            prompt_template: str = yaml.safe_load(f)["template"]
+    except Exception as e:
+        logging.error(f"[generate-title] Không đọc được prompt: {e}")
+        raise HTTPException(status_code=500, detail="Không đọc được prompt template.")
+
+    prompt = prompt_template.format(
+        user_message=body.user_message[:500],   # Giới hạn để tránh token quá dài
+        bot_message=body.bot_message[:1000],
+    )
+
+    try:
+        response = await svc._llm_router.ainvoke([LCHumanMessage(content=prompt)])
+        # _extract_ai_text xử lý cả str lẫn list content (Gemini thinking)
+        title = _extract_ai_text(response).strip()
+        # Làm sạch: bỏ dấu ngoặc kép, truncate nếu quá dài
+        title = title.strip('"\"\u201c\u201d').strip()
+        title = title[:100] if len(title) > 100 else title
+        logging.info(f"[generate-title] Title: {title!r}")
+        return {"title": title}
+    except Exception as e:
+        logging.error(f"[generate-title] Lỗi gọi LLM: {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi sinh tiêu đề: {str(e)}")
 
 
 # ---------------------------------------------------------------------------

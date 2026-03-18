@@ -1,0 +1,26 @@
+description: "Phân rã câu hỏi phức hợp thành danh sách sub-queries vi phạm độc lập"
+
+template: |
+  Bạn là bộ phân tích hành vi vi phạm giao thông.
+
+  Nhiệm vụ: Đọc legal_query và entities rồi phân rã thành các HÀNH VI VI PHẠM ĐỘC LẬP.
+
+  legal_query: {legal_query}
+  entities hiện có: {entities}
+
+  Quy tắc:
+  1. Mỗi hành vi vi phạm riêng biệt → 1 object trong array.
+  2. Kế thừa vehicle_type từ entities nếu không đề cập riêng cho từng hành vi.
+  3. Chuẩn hóa violation theo thuật ngữ pháp lý Nghị định 168/2024/NĐ-CP.
+  4. Nếu chỉ có 1 hành vi → trả về array 1 element.
+  5. Không bịa thêm hành vi không có trong câu hỏi.
+
+  Ví dụ:
+  Input legal_query: "xe máy không đội mũ bảo hiểm và nồng độ cồn mức 2"
+  Output:
+  [
+    {{"violation": "Không đội mũ bảo hiểm cho người đi mô tô, xe máy", "vehicle_type": "xe máy"}},
+    {{"violation": "Điều khiển xe mà trong máu hoặc hơi thở có nồng độ cồn vượt quá 50mg/100ml đến 80mg/100ml", "vehicle_type": "xe máy"}}
+  ]
+
+  Chỉ trả về JSON array hợp lệ, không có markdown, không có ```json, không giải thích thêm:

@@ -24,6 +24,17 @@ from app.core.config import settings
 from app.core.state import RAGState
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+_SKILLS_DIR = Path(__file__).parent.parent / "agent-skills"
+
+
+def _load_skill(filename: str) -> str:
+    """Load một agent-skill .md file, trả về nội dung text thuần."""
+    path = _SKILLS_DIR / filename
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        logging.warning(f"[SKILL] Không tìm thấy skill file: {filename}")
+        return ""
 
 # ---------------------------------------------------------------------------
 # Fallback detection: các mẫu cho thấy agent thiếu thông tin
@@ -89,8 +100,13 @@ class RAGService:
         self._graph = None
         self._tools: Optional[List[BaseTool]] = None
         self._system_prompt: str = _load_prompt("synthesis.yaml")
+        self._natural_prompt: str = _load_prompt("synthesis_natural.yaml")
         self._router_rewrite_prompt: str = _load_prompt("router_rewrite.yaml")
         self._reflector_prompt: str = _load_prompt("reflector.yaml")
+
+        # Agent skills — chỉ load những skill có giá trị bổ sung so với prompts hiện có
+        self._skill_graph_analyzer: str = _load_skill("01_graph_analyzer.skill.md")
+        self._skill_citation_validator: str = _load_skill("02_citation_validator.skill.md")
 
     async def initialize(self):
         loop = asyncio.get_running_loop()
@@ -143,7 +159,7 @@ class RAGService:
 
             # self._llm = ChatOpenAI(
             #     model="gpt-5.2",
-            #     api_key='proxypal-key',
+            #     api_key='proxypal',
             #     base_url="http://localhost:8317/v1",
             #     temperature=0
             # )
@@ -178,29 +194,29 @@ class RAGService:
     async def _node_router_rewrite(self, state: RAGState) -> dict:
         """
         Step 1: Phân loại câu hỏi (route) + chuẩn hóa thuật ngữ (legal_query)
-        + bóc tách entities — tất cả trong 1 lần gọi LLM.
+        + bóc tách entities + phân tách đa vi phạm (sub_queries) — tất cả trong 1 lần gọi LLM.
         """
         messages = list(state.get("messages", []))
-        
+
         chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
         recent_msgs = chat_msgs[-5:]  # Lấy 5 tin nhắn gần đây nhất (cả Hỏi và Đáp) làm ngữ cảnh
-        
+
         if not recent_msgs:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}}
-            
+            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": []}
+
         # Lấy câu hỏi cuối cùng của user
         last_question = ""
         for m in reversed(recent_msgs):
             if isinstance(m, HumanMessage):
                 last_question = m.content if isinstance(m.content, str) else str(m.content)
                 break
-                
+
         if not last_question:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}}
+            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": []}
 
         # Định dạng ngữ cảnh từ lịch sử gần nhất để Router hiểu ý câu hỏi nối tiếp
         history_text = "\n".join([f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent_msgs])
-        
+
         question = f"--- Lịch sử chat gần đây ---\n{history_text}\n--- Câu hỏi hiện tại ---\nUser: {last_question}"
 
         prompt = self._router_rewrite_prompt.format(question=question)
@@ -213,41 +229,212 @@ class RAGService:
             route = data.get("route", "use_tool")
             legal_query = data.get("legal_query", "")
             entities = data.get("entities", {})
-            logging.info(f"[STEP1] route={route!r}, legal_query={legal_query!r}, entities={entities}")
-            return {"route": route, "legal_query": legal_query, "entities": entities}
+
+            # ── Gắn tag response_style dựa trên route ──────────────────
+            response_style = "legal" if route == "use_tool" else "natural"
+
+            # ── Parse & validate sub_queries (multi-violation) ──────────
+            sub_queries = data.get("sub_queries", [])
+            validated_subs = []
+            for sq in sub_queries[:3]:  # Cap tối đa 3 sub-queries
+                if isinstance(sq, dict) and sq.get("legal_query"):
+                    validated_subs.append({
+                        "legal_query": sq["legal_query"],
+                        "entities": sq.get("entities", {}),
+                        "label": sq.get("label", sq["legal_query"][:30]),
+                    })
+
+            logging.info(
+                f"[STEP1] route={route!r}, style={response_style!r}, "
+                f"legal_query={legal_query!r}, sub_queries={len(validated_subs)}"
+            )
+            return {
+                "route": route,
+                "legal_query": legal_query,
+                "entities": entities,
+                "response_style": response_style,
+                "sub_queries": validated_subs,
+            }
         except Exception as e:
             logging.error(f"[STEP1] Lỗi: {e} — fallback use_tool")
-            return {"route": "use_tool", "legal_query": question, "entities": {}}
+            return {"route": "use_tool", "legal_query": question, "entities": {}, "response_style": "legal", "sub_queries": []}
 
     # ------------------------------------------------------------------
-    # Step 2 — Retriever (no LLM call)
+    # Step 2 — Retriever (parallel multi-violation via asyncio.gather)
     # ------------------------------------------------------------------
 
     async def _node_retriever(self, state: RAGState) -> dict:
         """
-        Step 2: Dùng legal_query embed + truy vấn Neo4j trực tiếp.
-        Không gọi LLM — kết quả lưu vào state["context"].
+        Step 2: Retrieval — xử lý cả single-violation và multi-violation.
+
+        - Single violation (sub_queries rỗng): chạy 1 lần _arun() như cũ
+        - Multi-violation (sub_queries không rỗng): chạy song song N lần
+          _arun() qua asyncio.gather, rồi gộp kết quả có cấu trúc
         """
+        sub_queries = state.get("sub_queries", [])
         legal_query = state.get("legal_query", "")
-        if not legal_query:
-            return {"context": ""}
+        entities = state.get("entities", {})
 
         graph_tool = next((t for t in self._tools if t.name == "search_legal_graph"), None)
         if not graph_tool:
             logging.error("[STEP2] GraphRetrievalTool không khả dụng.")
-            return {"context": ""}
+            return {"context": "", "sub_contexts": []}
 
-        logging.info(f"[STEP2] Truy vấn Neo4j: {legal_query[:80]}")
-        try:
-            context = await graph_tool._arun(query=legal_query)
-            return {"context": context}
-        except Exception as e:
-            logging.error(f"[STEP2] Lỗi: {e}")
-            return {"context": ""}
+        # ── Single-violation path (backward compatible) ───────────────
+        if not sub_queries:
+            if not legal_query:
+                return {"context": "", "sub_contexts": []}
+
+            logging.info(
+                f"[STEP2] Single-query retrieval: query='{legal_query[:80]}' | "
+                f"entities={entities}"
+            )
+            try:
+                context = await graph_tool._arun(query=legal_query, entities=entities)
+                return {"context": context, "sub_contexts": []}
+            except Exception as e:
+                logging.error(f"[STEP2] Lỗi: {e}")
+                return {"context": "", "sub_contexts": []}
+
+        # ── Multi-violation path (parallel retrieval) ─────────────────
+        logging.info(
+            f"[STEP2] Multi-query parallel retrieval: "
+            f"{len(sub_queries)} sub-queries"
+        )
+
+        async def _retrieve_one(sq: dict) -> dict:
+            q = sq.get("legal_query", "")
+            e = sq.get("entities", {})
+            label = sq.get("label", q[:30])
+            if not q:
+                return {"legal_query": q, "context": "", "label": label}
+            try:
+                ctx = await graph_tool._arun(query=q, entities=e)
+                return {"legal_query": q, "context": ctx, "label": label}
+            except Exception as ex:
+                logging.error(f"[STEP2] Sub-query '{label}' error: {ex}")
+                return {"legal_query": q, "context": "", "label": label}
+
+        tasks = [_retrieve_one(sq) for sq in sub_queries]
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        sub_contexts = [r for r in results if isinstance(r, dict)]
+
+        # Build merged context with per-violation separation
+        merged_context = self._format_multi_violation_context(sub_contexts)
+
+        logging.info(
+            f"[STEP2] Parallel retrieval complete: "
+            f"{len(sub_contexts)} sub-contexts, "
+            f"merged context length={len(merged_context)}"
+        )
+
+        return {"context": merged_context, "sub_contexts": sub_contexts}
+
+    @staticmethod
+    def _format_multi_violation_context(sub_contexts: list[dict]) -> str:
+        """
+        Gộp N sub-contexts thành 1 context string có delimiter rõ ràng
+        để Generator phân biệt dữ liệu từng vi phạm.
+        """
+        if not sub_contexts:
+            return ""
+
+        total = len(sub_contexts)
+        SEP = "═" * 60
+
+        parts = []
+        for i, sc in enumerate(sub_contexts, 1):
+            label = sc.get("label", f"Vi phạm {i}")
+            ctx = sc.get("context", "")
+
+            header = (
+                f"\n{SEP}\n"
+                f"  VI PHẠM {i}/{total}: {label}\n"
+                f"{SEP}"
+            )
+
+            if ctx and "Không tìm thấy" not in ctx:
+                parts.append(f"{header}\n{ctx}")
+            else:
+                parts.append(
+                    f"{header}\n"
+                    f"(Không tìm thấy thông tin cho vi phạm này trong đồ thị tri thức.)"
+                )
+
+        summary = (
+            f"[MULTI-VIOLATION CONTEXT: {total} vi phạm riêng biệt]\n"
+            f"Mỗi phần 'VI PHẠM X' chứa dữ liệu độc lập — "
+            f"KHÔNG được ghép mức phạt từ vi phạm này sang vi phạm khác.\n"
+        )
+
+        return summary + "\n".join(parts)
 
     # ------------------------------------------------------------------
     # Step 3 — Reflector / Critic
     # ------------------------------------------------------------------
+
+    # Từ khóa cho thấy context chứa thông tin xử phạt thực sự
+    _PENALTY_KEYWORDS: tuple = (
+        "phạt tiền", "triệu đồng", "nghìn đồng",
+        "tước quyền sử dụng giấy phép", "tước bằng",
+        "tạm giữ phương tiện", "tạm giữ xe",
+        "trừ điểm", "điểm giấy phép lái xe",
+        "cảnh cáo",
+    )
+    # Markers xuất hiện khi context thực sự đến từ graph retrieval
+    _RETRIEVAL_MARKERS: tuple = (
+        "--- nguồn", "[multi-violation context", "vi phạm 1/",
+        "nghị định 168/2024/nđ-cp", "═══",
+    )
+    # Alias loại xe để cover các cách viết khác nhau trong context
+    _VEHICLE_ALIASES: dict = {
+        "xe máy": ["xe máy", "mô tô", "xe gắn máy", "moto"],
+        "mô tô":  ["xe máy", "mô tô", "xe gắn máy", "moto"],
+        "ô tô":   ["ô tô", "xe ô tô", "xe con", "xe tải", "ô tô con"],
+        "xe tải": ["xe tải", "ô tô tải", "xe chở hàng"],
+    }
+
+    @classmethod
+    def _is_high_confidence_context(cls, context: str, entities: dict) -> bool:
+        """
+        Pre-check trước khi gọi LLM reflector. Bypass khi đủ 3 điều kiện:
+        1. Context có dữ liệu xử phạt (penalty keywords)
+        2. Context đến từ graph retrieval (retrieval markers)
+        3. Context liên quan đến đúng vi phạm và loại xe user hỏi
+        """
+        ctx_lower = context.lower()
+
+        # Điều kiện 1: phải có từ khóa phạt
+        if not any(kw in ctx_lower for kw in cls._PENALTY_KEYWORDS):
+            return False
+
+        # Điều kiện 2: phải có marker retrieval hợp lệ
+        if not any(marker in ctx_lower for marker in cls._RETRIEVAL_MARKERS):
+            return False
+
+        # Điều kiện 3a: vi phạm phải xuất hiện trong context
+        violation = entities.get("violation", "").lower()
+        if violation:
+            keywords = [w for w in violation.split() if len(w) > 3][:3]
+            if keywords and not any(kw in ctx_lower for kw in keywords):
+                logging.info(
+                    f"[STEP3] Pre-check fail: violation keywords {keywords} "
+                    f"không tìm thấy trong context → gọi LLM"
+                )
+                return False
+
+        # Điều kiện 3b: vehicle_type phải khớp nếu user có chỉ định
+        vehicle_type = entities.get("vehicle_type", "").lower()
+        if vehicle_type:
+            aliases = cls._VEHICLE_ALIASES.get(vehicle_type, [vehicle_type])
+            if not any(alias in ctx_lower for alias in aliases):
+                logging.info(
+                    f"[STEP3] Pre-check fail: vehicle_type='{vehicle_type}' "
+                    f"không tìm thấy trong context → gọi LLM"
+                )
+                return False
+
+        return True
 
     async def _node_reflector(self, state: RAGState) -> dict:
         """
@@ -255,6 +442,10 @@ class RAGService:
           sufficient          → đủ thông tin, đi đến generator
           needs_clarification → có data nhưng thiếu tham số, hỏi ngược user
           not_found           → không có trong NĐ 168, chuyển sang web search
+
+        Bổ sung: trigger_search flag
+          true  → Graph data không khớp hoặc độ tin cậy thấp → force web search
+          false → context đáng tin cậy
         """
         messages = state.get("messages", [])
         question = ""
@@ -265,6 +456,16 @@ class RAGService:
 
         context = state.get("context", "")
         entities = state.get("entities", {})
+
+        # Pre-check: bypass LLM khi context rõ ràng đủ mạnh và đúng context
+        # (Đã tắt do Pre-check chỉ kiểm tra keyword, dễ bị lọt các "vùng xám" như xe tự lái.
+        # Chi phí của Gemini 3 Flash rất rẻ, nên gọi LLM Reflector 100% để đảm bảo chất lượng)
+        if context and self._is_high_confidence_context(context, entities):
+            logging.info(
+                "[STEP3] Pre-check condition met, nhưng đã vô hiệu hóa bypass. "
+                "Vẫn gọi LLM Reflector để bắt các ca 'vùng xám' (Semantic Mismatch)."
+            )
+            # return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
 
         prompt = self._reflector_prompt.format(
             question=question,
@@ -279,11 +480,17 @@ class RAGService:
             data = json.loads(raw)
             verdict = data.get("verdict", "sufficient")
             clarification_q = data.get("clarification_question", "")
-            logging.info(f"[STEP3] verdict={verdict!r}")
-            return {"reflection": verdict, "clarification_question": clarification_q}
+            trigger_search = data.get("trigger_search", False)
+
+            logging.info(f"[STEP3] verdict={verdict!r}, trigger_search={trigger_search}")
+            return {
+                "reflection": verdict,
+                "clarification_question": clarification_q,
+                "trigger_search": trigger_search,
+            }
         except Exception as e:
             logging.error(f"[STEP3] Lỗi: {e} — fallback sufficient")
-            return {"reflection": "sufficient", "clarification_question": ""}
+            return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
 
     async def _node_clarifier(self, state: RAGState) -> dict:
         """Step 3b: Hỏi ngược user khi context có data nhưng thiếu tham số điều kiện."""
@@ -333,9 +540,14 @@ class RAGService:
         """
         Step 4: Tổng hợp câu trả lời cuối cùng.
         Context (từ Neo4j hoặc web) được inject vào messages trước khi gọi LLM.
+
+        response_style từ Router quyết định giọng văn:
+          - "legal"   → format Terminal cứng, trích dẫn pháp lý nghiêm túc
+          - "natural"  → trả lời như một người bạn thân thiện
         """
         messages = list(state.get("messages", []))
         context = state.get("context", "")
+        style = state.get("response_style", "legal")
 
         # 1. Tách SystemMessage cũ ra khỏi tin nhắn User/AI để không bị cắt xoá
         system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
@@ -344,11 +556,14 @@ class RAGService:
         # 2. Giữ 8 tin nhắn lịch sử gần nhất (4 lượt chat)
         recent_chat_msgs = chat_msgs[-8:]
 
-        # 3. Ghép lại danh sách messages cho LLM
+        # 3. Chọn system prompt theo response_style
+        chosen_prompt = self._system_prompt if style == "legal" else self._natural_prompt
+
+        # 4. Ghép lại danh sách messages cho LLM
         messages_to_llm = system_msgs + recent_chat_msgs
 
         if not any(isinstance(m, SystemMessage) for m in messages_to_llm):
-            messages_to_llm = [SystemMessage(content=self._system_prompt)] + messages_to_llm
+            messages_to_llm = [SystemMessage(content=chosen_prompt)] + messages_to_llm
 
         if context:
             messages_to_llm = messages_to_llm + [
@@ -357,11 +572,28 @@ class RAGService:
                         "[RETRIEVED_CONTEXT]\n"
                         f"{context}\n"
                         "[/RETRIEVED_CONTEXT]\n\n"
-                        "Dùng context trên để trả lời. "
-                        "Trích dẫn cụ thể Điểm, Khoản, Điều trong Nghị định 168/2024/NĐ-CP."
+                        "HƯỚNG DẪN SỬ DỤNG CONTEXT:\n"
+                        "1. Mỗi block bắt đầu bằng '═══ [Điều X, Khoản Y...] ═══' là một anchor duy nhất.\n"
+                        "   → Chỉ trích dẫn số Điều/Khoản nếu nó xuất hiện TƯỜNG MINH trong header '═══' đó.\n"
+                        "2. TUYỆT ĐỐI KHÔNG ghép số Điều từ block này với mức phạt từ block khác.\n"
+                        "3. TUYỆT ĐỐI KHÔNG dùng kiến thức ngoài context để suy ra số Điều/Khoản.\n"
+                        "4. Nếu không tìm thấy header '═══' → không ghi Điều/Khoản, chỉ mô tả mức phạt.\n"
+                        "5. Nếu context bắt đầu bằng '[MULTI-VIOLATION CONTEXT]': mỗi phần 'VI PHẠM X' "
+                        "là nguồn dữ liệu riêng biệt. Xử lý từng phần và tổng hợp cộng dồn cuối cùng.\n"
                     )
                 )
             ]
+
+        # Inject skill 02 + 03 cho legal flow để bổ sung hướng dẫn đọc graph và kiểm toán trích dẫn
+        if style == "legal":
+            skill_parts = [
+                s for s in [self._skill_graph_analyzer, self._skill_citation_validator]
+                if s
+            ]
+            if skill_parts:
+                messages_to_llm = messages_to_llm + [
+                    SystemMessage(content="\n\n---\n\n".join(skill_parts))
+                ]
 
         try:
             response = await self._llm.ainvoke(messages_to_llm)
@@ -375,7 +607,10 @@ class RAGService:
     # ------------------------------------------------------------------
 
     async def _node_agent_direct(self, state: RAGState) -> dict:
-        """Trả lời trực tiếp cho câu hỏi direct_answer (chào hỏi, hỏi về chatbot, v.v.)"""
+        """
+        Trả lời trực tiếp cho câu hỏi direct_answer (chào hỏi, hỏi về chatbot, v.v.)
+        Luôn dùng style "natural" — giọng văn thân thiện.
+        """
         messages = list(state.get("messages", []))
         
         system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
@@ -384,8 +619,9 @@ class RAGService:
 
         messages_to_llm = system_msgs + recent_chat_msgs
 
+        # Agent Direct luôn dùng natural prompt (thân thiện)
         if not any(isinstance(m, SystemMessage) for m in messages_to_llm):
-            messages_to_llm = [SystemMessage(content=self._system_prompt)] + messages_to_llm
+            messages_to_llm = [SystemMessage(content=self._natural_prompt)] + messages_to_llm
 
         try:
             response = await self._llm.ainvoke(messages_to_llm)
@@ -412,7 +648,7 @@ class RAGService:
 
     @staticmethod
     def _route_after_router(state: RAGState) -> str:
-        """Step 1 → Step 2 (retriever), direct answer, hoặc reject."""
+        """Step 1 → retriever, direct answer, hoặc reject."""
         route = state.get("route")
         if route == "direct_answer":
             return "agent_direct"
@@ -424,11 +660,27 @@ class RAGService:
     def _route_after_reflector(state: RAGState) -> str:
         """
         Step 3 → routing:
-          sufficient          → generator (Step 4)
-          needs_clarification → clarifier (hỏi ngược user, rồi END)
-          not_found           → web_search_fallback → generator
+          trigger_search = true   → web_search_fallback (ưu tiên cao nhất — force search)
+          sufficient              → generator (Step 4)
+          needs_clarification     → clarifier (hỏi ngược user, rồi END)
+          not_found               → web_search_fallback → generator
+
+        Logic mới (2 điều kiện force search):
+          1. Threshold: Graph tự động phát hiện score thấp → trigger_search = true
+          2. Reflector: LLM phát hiện data không khớp → trigger_search = true
         """
         verdict = state.get("reflection", "sufficient")
+        trigger_search = state.get("trigger_search", False)
+
+        # ── Ưu tiên 1: Force search (threshold hoặc reflector detection) ─────
+        if trigger_search:
+            logging.info(
+                "[ROUTING] trigger_search=True → chuyển sang web_search_fallback "
+                "(Graph data không đủ tin cậy hoặc không khớp)"
+            )
+            return "web_search_fallback"
+
+        # ── Ưu tiên 2: Verdict routing ──────────────────────────────────────
         if verdict == "needs_clarification":
             return "clarifier"
         if verdict == "not_found":
@@ -445,7 +697,7 @@ class RAGService:
 
              [START]
                 │
-          [router_rewrite]          ← Step 1: Phân loại + Bóc tách entities
+          [router_rewrite]          ← Step 1: Phân loại + Bóc tách entities + Sub-queries
                 │
          ┌──────┴──────────────┬────────────────┐
          │                     │                │
@@ -464,18 +716,20 @@ class RAGService:
              END              END          [generator]  ← Step 4
                                                 │
                                                END
+
+        Multi-violation: retriever node chạy song song qua asyncio.gather
         """
         graph = StateGraph(RAGState)
 
         # Nodes
-        graph.add_node("router_rewrite", self._node_router_rewrite)
-        graph.add_node("agent_direct", self._node_agent_direct)
-        graph.add_node("agent_reject", self._node_agent_reject)
-        graph.add_node("retriever", self._node_retriever)
-        graph.add_node("reflector", self._node_reflector)
-        graph.add_node("clarifier", self._node_clarifier)
+        graph.add_node("router_rewrite",      self._node_router_rewrite)
+        graph.add_node("agent_direct",        self._node_agent_direct)
+        graph.add_node("agent_reject",        self._node_agent_reject)
+        graph.add_node("retriever",           self._node_retriever)
+        graph.add_node("reflector",           self._node_reflector)
+        graph.add_node("clarifier",           self._node_clarifier)
         graph.add_node("web_search_fallback", self._node_web_search_fallback)
-        graph.add_node("generator", self._node_generator)
+        graph.add_node("generator",           self._node_generator)
 
         # Edges
         graph.set_entry_point("router_rewrite")
@@ -484,8 +738,8 @@ class RAGService:
             self._route_after_router,
             {
                 "agent_direct": "agent_direct",
-                "retriever": "retriever",
-                "agent_reject": "agent_reject"
+                "retriever":    "retriever",
+                "agent_reject": "agent_reject",
             },
         )
         graph.add_edge("agent_direct", END)
@@ -495,14 +749,14 @@ class RAGService:
             "reflector",
             self._route_after_reflector,
             {
-                "generator": "generator",
-                "clarifier": "clarifier",
+                "generator":          "generator",
+                "clarifier":          "clarifier",
                 "web_search_fallback": "web_search_fallback",
             },
         )
-        graph.add_edge("clarifier", END)
+        graph.add_edge("clarifier",           END)
         graph.add_edge("web_search_fallback", "generator")
-        graph.add_edge("generator", END)
+        graph.add_edge("generator",           END)
 
         compiled = graph.compile(checkpointer=self._checkpointer)
         if self._checkpointer:
@@ -516,7 +770,7 @@ class RAGService:
     # ------------------------------------------------------------------
 
     _RE_GRAPH_SOURCE = re.compile(
-        r"---\s*Nguồn\s+(\S+)\s*\(độ tương đồng:\s*([\d.]+)\)\s*---"
+        r"---\s*Nguồn\s+(\S+)\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---"
     )
     _RE_WEB_URL = re.compile(r"^URL\s*:\s*(https?://\S+)", re.MULTILINE)
 
@@ -702,6 +956,7 @@ class RAGService:
                 driver=self._driver,
                 embed_model=self._embed_model,
                 top_k=5,
+                score_threshold=0.6,  # Ngưỡng thấp nhất để chấp nhận kết quả (thấp hơn → force web search)
             )
         ]
 
