@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Response } from 'express';
+import { PrismaService } from 'prisma/prisma.service';
 import { MessagesService } from '../messages/messages.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import {
@@ -20,6 +21,7 @@ export class ChatService {
     private conversationService: ConversationsService,
     private readonly configService: ConfigService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly prisma: PrismaService,
   ) { }
 
   async askAI(question: string, conversationId: string, res: Response) {
@@ -123,6 +125,7 @@ export class ChatService {
     let fullResponse = '';
     let thoughtResponse = '';
     let metadata = {};
+    let aiMetrics: any = null;  // Capture AI metrics
     let lineBuffer = '';
 
     res.setHeader('Content-Type', 'text/event-stream');
@@ -140,6 +143,7 @@ export class ChatService {
         if (parsed.type === 'answer') fullResponse += parsed.content;
         else if (parsed.type === 'thinking') thoughtResponse += parsed.content;
         else if (parsed.type === 'metadata') metadata = parsed.content;
+        else if (parsed.type === 'metrics') aiMetrics = parsed.content; // Capture metrics
       } catch (error) {
         this.logger.error(`Lỗi parse dòng: ${line}`, error);
       }
@@ -160,6 +164,10 @@ export class ChatService {
         lineBuffer = '';
       }
 
+      this.logger.log(`[streamAI] Stream ended. fullResponse length: ${fullResponse.length}, thoughtResponse length: ${thoughtResponse.length}`);
+      this.logger.debug(`[streamAI] fullResponse preview: ${fullResponse.substring(0, 200)}`);
+      this.logger.debug(`[streamAI] thoughtResponse preview: ${thoughtResponse.substring(0, 200)}`);
+
       try {
         const [botMsg] = await this.messageService.createMessage({
           conversationId: conversation_id,
@@ -170,6 +178,35 @@ export class ChatService {
           metadata,
         });
         this.logger.log(`[streamAI] Đã lưu bot message — conv: ${conversation_id}`);
+
+        // ━━ Save AI Metrics to database ━━
+        if (aiMetrics) {
+          try {
+            await this.prisma.aIMetrics.create({
+              data: {
+                messageId: botMsg.id,
+                model: aiMetrics.model || 'gemini-3-flash-preview',
+                ttft: aiMetrics.ttft,
+                totalTime: aiMetrics.totalTime,
+                graphQueryTime: aiMetrics.graphQueryTime,
+                webSearchTime: aiMetrics.webSearchTime,
+                inputTokens: aiMetrics.inputTokens,
+                outputTokens: aiMetrics.outputTokens,
+                thinkingTokens: aiMetrics.thinkingTokens,
+                toolCalls: aiMetrics.toolCalls,
+                toolCallDetails: aiMetrics.toolCallDetails,
+                cost: aiMetrics.cost,
+                error: aiMetrics.error,
+                errorType: aiMetrics.errorType,
+                retryCount: 0,
+              },
+            });
+            this.logger.log(`[streamAI] Đã lưu AI metrics cho message: ${botMsg.id}`);
+          } catch (metricsErr) {
+            this.logger.error('Lỗi lưu AI metrics:', metricsErr);
+            // Don't fail the entire request if metrics saving fails
+          }
+        }
 
         // Trả về ID của bot message vừa tạo
         res.write(`data: ${JSON.stringify({ type: 'message_id', messageId: botMsg.id })}\n\n`);

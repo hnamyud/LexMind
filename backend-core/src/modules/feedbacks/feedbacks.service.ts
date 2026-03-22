@@ -47,15 +47,4 @@ export class FeedbacksService {
             },
         });
     }
-
-    // Admin có thể gọi API này để xem chi tiết log feedback
-    async fetchFeedbacksByMessage(messageId: string) {
-        return await this.prisma.feedback.findMany({
-            where: { messageId },
-            include: {
-                user: { select: { id: true, fullName: true, email: true } },
-            },
-            orderBy: { createdAt: 'desc' },
-        });
-    }
 }

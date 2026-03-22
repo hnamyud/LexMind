@@ -27,16 +27,4 @@ export class FeedbacksController {
         // Gọi upsert: Nếu user chưa vote, tự chèn vào. Đã vote thì update.
         return this.feedbacksService.upsertFeedback(messageId, user, createFeedbackDto);
     }
-
-    @Get('/message/:messageId')
-    @ApiBearerAuth('access-token')
-    @CheckPolicies({
-        // Chỉ admin mới được phép truy xuất danh sách feedback
-        handle: (ability: Ability) => ability.can(Action.Manage, 'all')
-    })
-    @ApiOperation({ summary: 'Xem tất cả những bài đánh giá về tin nhắn (Dành cho Admin).' })
-    @ResponseMessage('Truy xuất danh sách phản hồi thành công!')
-    async getFeedbacks(@Param('messageId') messageId: string) {
-        return this.feedbacksService.fetchFeedbacksByMessage(messageId);
-    }
 }

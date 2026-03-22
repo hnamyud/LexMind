@@ -94,6 +94,7 @@ class RAGService:
         self._driver = None
         self._llm = None
         self._llm_router = None
+        self._llm_reflector = None  # LLM riêng cho reflection (không dùng thinking budget)
         self._embed_model = None
 
         self._checkpointer: Optional[AsyncPostgresSaver] = checkpointer
@@ -155,6 +156,8 @@ class RAGService:
                 temperature=0,
                 include_thoughts=True,
                 thinking_budget=8192,
+                stream_usage=True,
+                streaming=True,  # Enable streaming for LangGraph astream_events
             )
 
             # self._llm = ChatOpenAI(
@@ -168,8 +171,15 @@ class RAGService:
                 model="gemini-3.1-flash-lite-preview",
                 google_api_key=self._api_key,
                 temperature=0,
-                include_thoughts=True,
-                thinking_budget=8192,
+                # include_thoughts=True,
+                # thinking_budget=8192,
+            )
+
+            # LLM riêng cho reflector - không dùng thinking budget để giảm token & latency
+            self._llm_reflector = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                google_api_key=self._api_key,
+                temperature=0,
             )
             logging.info("✅ Kết nối Gemini API thành công! (ChatGoogleGenerativeAI)")
         except Exception as e:
@@ -473,7 +483,7 @@ class RAGService:
             entities=json.dumps(entities, ensure_ascii=False, indent=2),
         )
         try:
-            response = await self._llm.ainvoke([HumanMessage(content=prompt)])
+            response = await self._llm_reflector.ainvoke([HumanMessage(content=prompt)])
             raw = _extract_ai_text(response).strip()
             raw = re.sub(r'^```(?:json)?\s*', '', raw)
             raw = re.sub(r'\s*```$', '', raw.strip())
@@ -788,11 +798,32 @@ class RAGService:
             for m in RAGService._RE_WEB_URL.finditer(context)
         ]
 
+    @staticmethod
+    def _calculate_cost(input_tokens: int, output_tokens: int, thinking_tokens: int) -> float:
+        """
+        Calculate estimated cost based on Gemini Flash pricing.
+
+        Gemini Flash Preview pricing (as of 2026):
+        - Input: $0.075 per 1M tokens
+        - Output: $0.30 per 1M tokens
+        - Thinking: $0.30 per 1M tokens (same as output)
+
+        Returns cost in USD.
+        """
+        input_cost = (input_tokens / 1_000_000) * 0.075
+        output_cost = (output_tokens / 1_000_000) * 0.30
+        thinking_cost = (thinking_tokens / 1_000_000) * 0.30
+
+        total_cost = input_cost + output_cost + thinking_cost
+        return round(total_cost, 6)  # Round to 6 decimal places
+
     # ------------------------------------------------------------------
     # Pipeline streaming (LangGraph astream_events v2)
     # ------------------------------------------------------------------
 
     async def ask_stream(self, question: str, conversation_id: str | None = None):
+        import time
+
         initial_state: dict = {
             "messages": [HumanMessage(content=question)],
         }
@@ -807,6 +838,29 @@ class RAGService:
         tag_start = "<thinking>"
         tag_end = "</thinking>"
 
+        # ── Metrics Tracking ──────────────────────────────────────────────
+        start_time = time.time()
+        ttft = None  # Time to first token
+        first_token_received = False
+
+        # Token tracking
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_thinking_tokens = 0
+
+        # Node timing tracking
+        node_timings = {}  # {node_name: {"start": time, "duration": ms}}
+        current_node = None
+        current_node_start = None
+
+        # Tool usage
+        tool_calls_count = 0
+        tool_call_details = []
+
+        # Error tracking
+        error_message = None
+        error_type = None
+
         try:
             async for event in self._graph.astream_events(initial_state, config=graph_config, version="v2"):
                 evt_type = event["event"]
@@ -815,6 +869,10 @@ class RAGService:
 
                 # ── Trạng thái quá trình (Process Tracking) ──────────────
                 if evt_type == "on_chain_start" and evt_name == evt_meta_node:
+                    # Track node start time
+                    current_node = evt_name
+                    current_node_start = time.time()
+
                     if evt_name == "router_rewrite":
                         yield json.dumps({"type": "process", "content": "Phân tích và phân loại câu hỏi..."}, ensure_ascii=False) + "\n"
                     elif evt_name == "retriever":
@@ -835,6 +893,13 @@ class RAGService:
                 # ── LLM streaming: chỉ từ generator & agent_direct ──────────
                 if evt_type == "on_chat_model_stream" and evt_meta_node in _STREAM_NODES:
                     chunk = event["data"]["chunk"]
+
+                    # Capture TTFT (time to first token)
+                    if not first_token_received:
+                        ttft = int((time.time() - start_time) * 1000)  # milliseconds
+                        first_token_received = True
+                        logging.info(f"[METRICS] TTFT: {ttft}ms")
+
                     content = getattr(chunk, "content", None)
                     if not content:
                         continue
@@ -906,10 +971,63 @@ class RAGService:
                                         yield json.dumps({"type": "thinking", "content": tag_buffer}, ensure_ascii=False) + "\n"
                                         tag_buffer = ""
 
+                # ── Capture token usage from on_chat_model_end ──────────────
+                elif evt_type == "on_chat_model_end" and evt_meta_node in _STREAM_NODES:
+                    # This is where Gemini sends the final usage_metadata
+                    output_data = event.get("data", {}).get("output", {})
+
+                    # Output could be AIMessage object or dict
+                    usage_metadata = None
+                    if hasattr(output_data, "usage_metadata"):
+                        usage_metadata = output_data.usage_metadata
+                    elif isinstance(output_data, dict):
+                        usage_metadata = output_data.get("usage_metadata")
+
+                    if usage_metadata:
+                        logging.info(f"[METRICS] on_chat_model_end usage_metadata found: {usage_metadata}")
+
+                        # usage_metadata is a dict, use .get() instead of getattr()
+                        if isinstance(usage_metadata, dict):
+                            total_input_tokens = usage_metadata.get("input_tokens", 0) or 0
+                            total_output_tokens = usage_metadata.get("output_tokens", 0) or 0
+                            # Thinking tokens are in output_token_details.reasoning for Gemini
+                            output_details = usage_metadata.get("output_token_details", {})
+                            total_thinking_tokens = output_details.get("reasoning", 0) or 0
+                        else:
+                            # Fallback for object-like usage_metadata
+                            total_input_tokens = getattr(usage_metadata, "input_tokens", 0) or 0
+                            total_output_tokens = getattr(usage_metadata, "output_tokens", 0) or 0
+                            total_thinking_tokens = getattr(usage_metadata, "thinking_tokens", 0) or 0
+
+                        logging.info(f"[METRICS] Captured tokens - input: {total_input_tokens}, output: {total_output_tokens}, thinking: {total_thinking_tokens}")
+                    else:
+                        logging.debug(f"[METRICS] on_chat_model_end but no usage_metadata. output type: {type(output_data)}")
+
                 elif evt_type == "on_chain_end" and evt_name == evt_meta_node:
+                    # Track node end time
+                    if current_node == evt_name and current_node_start:
+                        duration_ms = int((time.time() - current_node_start) * 1000)
+                        node_timings[evt_name] = duration_ms
+                        logging.info(f"[METRICS] Node {evt_name}: {duration_ms}ms")
+
+                        # Track tool calls
+                        if evt_name == "retriever":
+                            tool_calls_count += 1
+                            tool_call_details.append({
+                                "tool": "graph_retrieval",
+                                "duration_ms": duration_ms
+                            })
+                        elif evt_name == "web_search_fallback":
+                            tool_calls_count += 1
+                            tool_call_details.append({
+                                "tool": "web_search",
+                                "duration_ms": duration_ms
+                            })
+
                     output = event.get("data", {}).get("output", {})
 
-                    # ── Clarifier & Agent Reject: emit nội dung trực tiếp ────────
+                    # ── Emit nội dung trực tiếp cho các node KHÔNG stream: clarifier, agent_reject ────────
+                    # generator và agent_direct đã được stream qua on_chat_model_stream, không emit lại ở đây
                     if evt_name in ("clarifier", "agent_reject"):
                         for m in (output.get("messages", []) if isinstance(output, dict) else []):
                             if isinstance(m, AIMessage):
@@ -936,12 +1054,45 @@ class RAGService:
                                     collected_sources.extend(RAGService._extract_web_sources(ctx))
 
         except Exception as e:
+            error_message = str(e)
+            error_type = type(e).__name__
             logging.error(f"[LANGGRAPH] thread_id={thread_id} | Lỗi: {e}")
             yield json.dumps(
                 {"type": "thought", "content": f"❌ Lỗi trong quá trình xử lý: {e}"},
                 ensure_ascii=False,
             ) + "\n"
 
+        # ── Calculate metrics ──────────────────────────────────────────────
+        total_time_ms = int((time.time() - start_time) * 1000)
+
+        # Calculate cost (Gemini Flash pricing as of 2026)
+        cost = self._calculate_cost(
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+            thinking_tokens=total_thinking_tokens
+        )
+
+        # Prepare metrics payload
+        metrics = {
+            "model": "gemini-3-flash-preview",  # Main model used
+            "ttft": ttft,
+            "totalTime": total_time_ms,
+            "graphQueryTime": node_timings.get("retriever"),
+            "webSearchTime": node_timings.get("web_search_fallback"),
+            "inputTokens": total_input_tokens if total_input_tokens > 0 else None,
+            "outputTokens": total_output_tokens if total_output_tokens > 0 else None,
+            "thinkingTokens": total_thinking_tokens if total_thinking_tokens > 0 else None,
+            "toolCalls": tool_calls_count,
+            "toolCallDetails": tool_call_details if tool_call_details else None,
+            "cost": cost,
+            "error": error_message,
+            "errorType": error_type
+        }
+
+        logging.info(f"[METRICS] Final metrics: {metrics}")
+
+        # Send metrics before metadata and done
+        yield json.dumps({"type": "metrics", "content": metrics}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "metadata", "content": {"sources": collected_sources}}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
 
