@@ -65,6 +65,7 @@ async def health_check(request: Request):
         "neo4j_connected": svc._driver is not None if svc else False,
         "gemini_configured": svc._llm is not None if svc else False,
         "embed_model_loaded": svc._embed_model is not None if svc else False,
+        "cache_connected": svc._cache.is_connected if svc and svc._cache else False,
     }
 
 
@@ -86,7 +87,44 @@ async def debug_info(request: Request):
             if svc._embed_model
             else None
         ),
+        "cache_stats": svc._cache.get_stats() if svc._cache else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Cache Management
+# ---------------------------------------------------------------------------
+
+@router.delete("/cache", tags=["Cache"], dependencies=[Depends(verify_internal_secret)])
+async def flush_cache(request: Request):
+    """Xoá toàn bộ semantic cache (yêu cầu X-Internal-Secret)."""
+    svc = _get_service(request)
+    if not svc._cache or not svc._cache.is_connected:
+        raise HTTPException(status_code=503, detail="Redis Semantic Cache chưa được kết nối.")
+    success = await svc._cache.clear()
+    if success:
+        return {"status": "ok", "message": "Đã xóa toàn bộ semantic cache."}
+    else:
+        raise HTTPException(status_code=500, detail="Lỗi khi xóa cache.")
+
+
+@router.get("/cache/stats", tags=["Cache"])
+async def cache_stats(request: Request):
+    """Lấy thống kê semantic cache."""
+    svc = _get_service(request)
+    if not svc._cache:
+        return {"connected": False, "message": "Semantic Cache chưa được khởi tạo."}
+    return svc._cache.get_stats()
+
+
+@router.delete("/cache/invalidate/{law_tag}", tags=["Cache"], dependencies=[Depends(verify_internal_secret)])
+async def invalidate_cache_by_tag(law_tag: str, request: Request):
+    """Xóa cache entries theo law_tag (vd: nd_168_2024). Dùng khi update dữ liệu luật."""
+    svc = _get_service(request)
+    if not svc._cache or not svc._cache.is_connected:
+        raise HTTPException(status_code=503, detail="Redis Semantic Cache chưa được kết nối.")
+    count = await svc._cache.invalidate_by_tag(law_tag)
+    return {"status": "ok", "tag": law_tag, "entries_removed": count}
 
 
 # ---------------------------------------------------------------------------

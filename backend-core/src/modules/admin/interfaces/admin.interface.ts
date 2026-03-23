@@ -91,3 +91,24 @@ export interface AIErrorsResponse {
     count: number;
   }>;
 }
+
+export interface CacheAnalyticsResponse {
+  overview: {
+    totalQueries: number;
+    cacheHits: number;
+    cacheMisses: number;
+    hitRatePercent: number;
+    avgTimeSavedMs: number;
+    totalTimeSavedMs: number;
+  };
+  responseTimeComparison: {
+    cached: { avg: number; p50: number | null; p95: number | null };
+    nonCached: { avg: number; p50: number | null; p95: number | null };
+  };
+  timeSeries: Array<{
+    date: string;
+    hits: number;
+    misses: number;
+    hitRate: number;
+  }>;
+}

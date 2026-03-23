@@ -78,6 +78,14 @@ export class AdminController {
     return this.adminService.getAIQuality(query);
   }
 
+  @Get('ai/cache')
+  @CheckPolicies({ handle: (ability: Ability) => ability.can(Action.Manage, 'all') })
+  @ApiOperation({ summary: 'Cache analytics: hit rate, response time comparison, time saved' })
+  @ResponseMessage('Lấy cache analytics thành công')
+  async getCacheAnalytics(@Query() query: StatsQueryDto) {
+    return this.adminService.getCacheAnalytics(query);
+  }
+
   // ==================== PHASE 3: HEALTH CHECK ====================
 
   @Get('health')

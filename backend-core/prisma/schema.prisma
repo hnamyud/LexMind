@@ -99,6 +99,10 @@ model AIMetrics {
   errorType       String?  @map("error_type") // e.g., "AI_TIMEOUT", "RATE_LIMIT", "NEO4J_ERROR"
   retryCount      Int?     @default(0) @map("retry_count")
 
+  // Cache tracking
+  cacheHit        Boolean  @default(false) @map("cache_hit")
+  cacheCheckTime  Int?     @map("cache_check_time")  // ms
+
   createdAt       DateTime @default(now()) @map("created_at")
 
   // Relations

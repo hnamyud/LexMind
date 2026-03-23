@@ -20,6 +20,9 @@ class Settings:
     # PostgreSQL dùng cho LangGraph AsyncPostgresSaver
     # Format: postgresql+psycopg://user:password@host:port/dbname
     DATABASE_URL: str = os.getenv("DATABASE_URL")
+
+    # Redis Semantic Cache (cần Redis Stack cho RediSearch module)
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     INTERNAL_SECRET: str = os.getenv("X-Internal-Secret")
     FASTAPI_URI: str = os.getenv("FASTAPI_URI")
     FASTAPI_PORT: str = os.getenv("FASTAPI_PORT")

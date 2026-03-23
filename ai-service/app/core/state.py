@@ -31,3 +31,8 @@ class RAGState(TypedDict):
 
     # ── Web sources (khi dùng web search fallback) ────────────────────────────
     web_sources: List[dict]      # [{url, title}, ...] — nguồn web đã tham khảo
+
+    # ── Semantic Cache ─────────────────────────────────────────────────────────
+    cache_hit: bool              # True nếu câu trả lời lấy từ semantic cache
+    cached_response: str         # Nội dung response từ cache (nếu cache_hit=True)
+

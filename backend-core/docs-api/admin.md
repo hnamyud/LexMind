@@ -137,6 +137,7 @@ Theo dõi hiệu suất kỹ thuật và các lỗi phát sinh từ AI Service.
 |----------|--------|-------|--------------------|
 | `/ai/performance` | `GET` | Metrics về tốc độ, tokens, chi phí. | `dateFrom`, `dateTo`, `groupBy` (hour, day, week...) |
 | `/ai/quality` | `GET` | Metrics về chất lượng dựa trên feedback. | `dateFrom`, `dateTo`, `groupBy` |
+| `/ai/cache` | `GET` | Tình trạng Semantic Cache: hit rate, tiết kiệm thời gian, so sánh response time. | `dateFrom`, `dateTo` |
 | `/ai/errors` | `GET` | Danh sách lỗi AI (timeout, neo4j error...) để debugging. | `page`, `limit`, `errorCode`, `dateFrom`... |
 
 **Ví dụ phản hồi Performance (`GET /admin/ai/performance`):**
@@ -160,6 +161,28 @@ Theo dõi hiệu suất kỹ thuật và các lỗi phát sinh từ AI Service.
     "totalOutputTokens": 200000,
     "avgInputTokensPerMessage": 80
   }
+}
+```
+
+**Ví dụ phản hồi Cache Analytics (`GET /admin/ai/cache`):**
+```json
+{
+  "overview": {
+    "totalQueries": 1250,
+    "cacheHits": 312,
+    "cacheMisses": 938,
+    "hitRatePercent": 24.96,
+    "avgTimeSavedMs": 4200,
+    "totalTimeSavedMs": 1310400
+  },
+  "responseTimeComparison": {
+    "cached": { "avg": 850, "p50": 720, "p95": 1400 },
+    "nonCached": { "avg": 5050, "p50": 4600, "p95": 8200 }
+  },
+  "timeSeries": [
+    { "date": "2026-03-22", "hits": 45, "misses": 120, "hitRate": 0.27 },
+    { "date": "2026-03-23", "hits": 67, "misses": 98, "hitRate": 0.41 }
+  ]
 }
 ```
 

@@ -198,6 +198,8 @@ export class ChatService {
                 cost: aiMetrics.cost,
                 error: aiMetrics.error,
                 errorType: aiMetrics.errorType,
+                cacheHit: aiMetrics.cacheHit ?? false,
+                cacheCheckTime: aiMetrics.cacheCheckTime,
                 retryCount: 0,
               },
             });

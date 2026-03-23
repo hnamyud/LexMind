@@ -22,6 +22,7 @@ from app.tools.web_search import make_web_search_tool
 
 from app.core.config import settings
 from app.core.state import RAGState
+from app.cache.semantic_cache import SemanticCacheService
 
 _PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _SKILLS_DIR = Path(__file__).parent.parent / "agent-skills"
@@ -45,17 +46,20 @@ def _load_skill(filename: str) -> str:
 
 _NODE_STEPS: dict = {
     "router_rewrite":      {"step": 1, "label": "🔍 Đang phân tích câu hỏi..."},
+    "cache_check":         {"step": 1, "label": "⚡ Đang kiểm tra cache..."},
     "retriever":           {"step": 2, "label": "📚 Đang tra cứu đồ thị luật..."},
     "reflector":           {"step": 3, "label": "🔎 Đang kiểm tra tính đầy đủ..."},
     "web_search_fallback": {"step": 3, "label": "🌐 Đang tìm kiếm bổ sung trên web..."},
     "clarifier":           {"step": 3, "label": "❓ Cần làm rõ thêm câu hỏi..."},
     "generator":           {"step": 4, "label": "✍️ Đang soạn câu trả lời..."},
+    "generator_cached":    {"step": 4, "label": "⚡ Trả lời từ cache..."},
     "agent_direct":        {"step": 1, "label": "💬 Đang xử lý câu hỏi..."},
     "agent_reject":        {"step": 1, "label": "🚫 Đang từ chối câu hỏi ngoại lệ..."},
 }
 
 # Chỉ stream thinking/answer từ các node gọi LLM để sinh câu trả lời cuối
 _STREAM_NODES: frozenset = frozenset({"generator", "agent_direct"})
+_CACHE_STREAM_NODES: frozenset = frozenset({"generator_cached"})
 
 
 def _extract_ai_text(msg: AIMessage) -> str:
@@ -81,6 +85,12 @@ def _load_prompt(filename: str) -> str:
     return data["template"]
 
 class RAGService:
+    _REFLECTOR_SCORE_THRESHOLD: float = 0.6
+    _RE_CONTEXT_SOURCE_HEADER = re.compile(
+        r"^---\s*Nguồn\s+\S+\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---\s*$",
+        re.MULTILINE,
+    )
+
     def __init__(self, checkpointer: Optional[AsyncPostgresSaver] = None):
         self._uri = settings.NEO4J_URI
         self._user = settings.NEO4J_USER
@@ -109,6 +119,9 @@ class RAGService:
         self._skill_graph_analyzer: str = _load_skill("01_graph_analyzer.skill.md")
         self._skill_citation_validator: str = _load_skill("02_citation_validator.skill.md")
 
+        # Semantic Cache
+        self._cache: Optional[SemanticCacheService] = None
+
     async def initialize(self):
         loop = asyncio.get_running_loop()
         await self._connect_neo4j()
@@ -123,6 +136,14 @@ class RAGService:
             raise RuntimeError("Khởi tạo RAGService thất bại: Lỗi cấu hình LLM (Gemini).")
         if not self._embed_model:
             raise RuntimeError("Khởi tạo RAGService thất bại: Không tải được embedding model.")
+
+        # Khởi tạo Semantic Cache (non-blocking, graceful fallback)
+        self._cache = SemanticCacheService(
+            redis_url=settings.REDIS_URL,
+            embed_model=self._embed_model,
+            ttl=86400,  # 24 giờ
+        )
+        await self._cache.initialize()
 
         self._graph = self._build_graph()
 
@@ -155,7 +176,7 @@ class RAGService:
                 google_api_key=self._api_key,
                 temperature=0,
                 include_thoughts=True,
-                thinking_budget=8192,
+                thinking_budget=2048,  # Giảm 75% từ 8K → tiết kiệm cost+latency, vẫn đủ cho reasoning cơ bản
                 stream_usage=True,
                 streaming=True,  # Enable streaming for LangGraph astream_events
             )
@@ -170,9 +191,7 @@ class RAGService:
             self._llm_router = ChatGoogleGenerativeAI(
                 model="gemini-3.1-flash-lite-preview",
                 google_api_key=self._api_key,
-                temperature=0,
-                # include_thoughts=True,
-                # thinking_budget=8192,
+                temperature=0,       
             )
 
             # LLM riêng cho reflector - không dùng thinking budget để giảm token & latency
@@ -273,6 +292,60 @@ class RAGService:
     # Step 2 — Retriever (parallel multi-violation via asyncio.gather)
     # ------------------------------------------------------------------
 
+    @classmethod
+    def _filter_context_for_reflector(cls, context: str) -> str:
+        """
+        Lọc block context trước khi chuyển sang reflector:
+        - Chỉ giữ các block có score >= _REFLECTOR_SCORE_THRESHOLD
+        - Nếu tất cả block bị loại -> trả marker LOW_CONFIDENCE để trigger web search.
+        """
+        if not context:
+            return context
+
+        # Tôn trọng kết quả đã được graph tool đánh dấu low-confidence trước đó.
+        if "[LOW_CONFIDENCE_THRESHOLD]" in context:
+            return context
+
+        headers = list(cls._RE_CONTEXT_SOURCE_HEADER.finditer(context))
+        if not headers:
+            return context
+
+        kept_blocks: list[str] = []
+        total_blocks = len(headers)
+
+        for i, header in enumerate(headers):
+            start = header.start()
+            end = headers[i + 1].start() if i + 1 < total_blocks else len(context)
+            block = context[start:end].strip()
+            try:
+                score = float(header.group(1))
+            except Exception:
+                score = 0.0
+
+            if score >= cls._REFLECTOR_SCORE_THRESHOLD:
+                kept_blocks.append(block)
+
+        if not kept_blocks:
+            low_confidence_msg = (
+                "⚠️ [LOW_CONFIDENCE_THRESHOLD] "
+                f"Tất cả kết quả retrieval đều dưới ngưỡng {cls._REFLECTOR_SCORE_THRESHOLD:.1f}. "
+                "Nên chuyển sang tìm kiếm web để bổ sung."
+            )
+            logging.warning(
+                f"[STEP2] Pre-reflector threshold filter removed all blocks: "
+                f"kept=0/{total_blocks}, threshold={cls._REFLECTOR_SCORE_THRESHOLD:.1f}"
+            )
+            return low_confidence_msg
+
+        filtered_context = "\n\n".join(kept_blocks)
+        if len(kept_blocks) < total_blocks:
+            logging.info(
+                f"[STEP2] Pre-reflector threshold filter: kept={len(kept_blocks)}/{total_blocks}, "
+                f"threshold={cls._REFLECTOR_SCORE_THRESHOLD:.1f}"
+            )
+
+        return filtered_context
+
     async def _node_retriever(self, state: RAGState) -> dict:
         """
         Step 2: Retrieval — xử lý cả single-violation và multi-violation.
@@ -301,6 +374,7 @@ class RAGService:
             )
             try:
                 context = await graph_tool._arun(query=legal_query, entities=entities)
+                context = self._filter_context_for_reflector(context)
                 return {"context": context, "sub_contexts": []}
             except Exception as e:
                 logging.error(f"[STEP2] Lỗi: {e}")
@@ -320,6 +394,7 @@ class RAGService:
                 return {"legal_query": q, "context": "", "label": label}
             try:
                 ctx = await graph_tool._arun(query=q, entities=e)
+                ctx = self._filter_context_for_reflector(ctx)
                 return {"legal_query": q, "context": ctx, "label": label}
             except Exception as ex:
                 logging.error(f"[STEP2] Sub-query '{label}' error: {ex}")
@@ -653,17 +728,76 @@ class RAGService:
         return {"messages": [AIMessage(content=reason)]}
 
     # ------------------------------------------------------------------
-    # Routing logic
+    # Cache Check (sau router_rewrite, trước retriever)
     # ------------------------------------------------------------------
+
+    async def _node_cache_check(self, state: RAGState) -> dict:
+        """
+        Kiểm tra Semantic Cache sau khi router_rewrite đã bóc tách entities.
+
+        Dùng legal_query (đã chuẩn hóa) làm input tìm kiếm cache.
+        Nếu HIT → set cache_hit=True, cached_response=response text.
+        Nếu MISS → set cache_hit=False, pipeline tiếp tục bình thường.
+        """
+        legal_query = state.get("legal_query", "")
+        entities = state.get("entities", {})
+
+        if not self._cache or not self._cache.is_connected or not legal_query:
+            return {"cache_hit": False, "cached_response": ""}
+
+        try:
+            vehicle_type = entities.get("vehicle_type", "") or ""
+            violation = entities.get("violation", "") or ""
+
+            result = await self._cache.check(
+                query=legal_query,
+                vehicle_type=vehicle_type,
+                violation_type=violation,
+            )
+
+            if result:
+                logging.info(
+                    f"[STEP1.5] Cache HIT ⚡ — distance={result['distance']:.4f}, "
+                    f"cached_query='{result.get('cached_query', '')[:50]}'"
+                )
+                return {
+                    "cache_hit": True,
+                    "cached_response": result["response"],
+                }
+            else:
+                logging.info(f"[STEP1.5] Cache MISS — query='{legal_query[:60]}'")
+                return {"cache_hit": False, "cached_response": ""}
+
+        except Exception as e:
+            logging.warning(f"[STEP1.5] Cache check error: {e} — fallback to retriever")
+            return {"cache_hit": False, "cached_response": ""}
+
+    # ------------------------------------------------------------------
+    # Generator Cached (trả lời từ cache, skip retriever/reflector)
+    # ------------------------------------------------------------------
+
+    async def _node_generator_cached(self, state: RAGState) -> dict:
+        """Emit cached response trực tiếp, không cần gọi LLM."""
+        cached_response = state.get("cached_response", "")
+        return {"messages": [AIMessage(content=cached_response)]}
+
 
     @staticmethod
     def _route_after_router(state: RAGState) -> str:
-        """Step 1 → retriever, direct answer, hoặc reject."""
+        """Step 1 → cache_check (cho use_tool), direct answer, hoặc reject."""
         route = state.get("route")
         if route == "direct_answer":
             return "agent_direct"
         if route == "out_of_domain":
             return "agent_reject"
+        return "cache_check"  # use_tool → kiểm tra cache trước
+
+    @staticmethod
+    def _route_after_cache(state: RAGState) -> str:
+        """Cache check → generator_cached (nếu HIT) hoặc retriever (nếu MISS)."""
+        if state.get("cache_hit", False):
+            logging.info("[ROUTING] cache_hit=True → generator_cached (skip retriever/reflector)")
+            return "generator_cached"
         return "retriever"
 
     @staticmethod
@@ -703,7 +837,7 @@ class RAGService:
 
     def _build_graph(self):
         """
-        Pipeline 4 bước:
+        Pipeline 5 bước (có Semantic Cache):
 
              [START]
                 │
@@ -713,19 +847,25 @@ class RAGService:
          │                     │                │
    direct_answer?          use_tool?      out_of_domain?
          │                     │                │
-   [agent_direct]         [retriever]     [agent_reject]
+   [agent_direct]        [cache_check]    [agent_reject]
          │                     │                │
-        END              [reflector]           END
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-        sufficient?  needs_clarification?  not_found?
-              │                │                │
-         [generator]      [clarifier]   [web_search_fallback]
-              │                │                │
-             END              END          [generator]  ← Step 4
-                                                │
-                                               END
+        END           ┌───────┴───────┐        END
+                      │               │
+                   cache_hit?     cache_miss?
+                      │               │
+              [generator_cached]  [retriever]
+                      │               │
+                     END         [reflector]
+                                      │
+                     ┌────────────────┼────────────────┐
+                     │                │                │
+               sufficient?  needs_clarification?  not_found?
+                     │                │                │
+                [generator]      [clarifier]   [web_search_fallback]
+                     │                │                │
+                    END              END          [generator]
+                                                       │
+                                                      END
 
         Multi-violation: retriever node chạy song song qua asyncio.gather
         """
@@ -733,6 +873,8 @@ class RAGService:
 
         # Nodes
         graph.add_node("router_rewrite",      self._node_router_rewrite)
+        graph.add_node("cache_check",         self._node_cache_check)
+        graph.add_node("generator_cached",    self._node_generator_cached)
         graph.add_node("agent_direct",        self._node_agent_direct)
         graph.add_node("agent_reject",        self._node_agent_reject)
         graph.add_node("retriever",           self._node_retriever)
@@ -748,12 +890,21 @@ class RAGService:
             self._route_after_router,
             {
                 "agent_direct": "agent_direct",
-                "retriever":    "retriever",
+                "cache_check":  "cache_check",
                 "agent_reject": "agent_reject",
             },
         )
         graph.add_edge("agent_direct", END)
         graph.add_edge("agent_reject", END)
+        graph.add_conditional_edges(
+            "cache_check",
+            self._route_after_cache,
+            {
+                "generator_cached": "generator_cached",
+                "retriever":        "retriever",
+            },
+        )
+        graph.add_edge("generator_cached", END)
         graph.add_edge("retriever", "reflector")
         graph.add_conditional_edges(
             "reflector",
@@ -769,10 +920,11 @@ class RAGService:
         graph.add_edge("generator",           END)
 
         compiled = graph.compile(checkpointer=self._checkpointer)
+        cache_status = "có cache" if self._cache and self._cache.is_connected else "không cache"
         if self._checkpointer:
-            logging.info("✅ LangGraph compiled — Pipeline 4 bước: Router→Retriever→Reflector→Generator.")
+            logging.info(f"✅ LangGraph compiled ({cache_status}) — Pipeline: Router→Cache→Retriever→Reflector→Generator.")
         else:
-            logging.warning("⚠️  LangGraph compiled (stateless) — Pipeline 4 bước: Router→Retriever→Reflector→Generator.")
+            logging.warning(f"⚠️  LangGraph compiled (stateless, {cache_status}) — Pipeline: Router→Cache→Retriever→Reflector→Generator.")
         return compiled
 
     # ------------------------------------------------------------------
@@ -832,6 +984,14 @@ class RAGService:
         graph_config = {"configurable": {"thread_id": thread_id}}
         collected_sources: list[dict] = []
 
+        # Cache tracking
+        is_cache_hit = False
+        final_answer_text = ""  # Thu thập response text để store vào cache
+        final_route = ""  # Route từ router_rewrite
+        final_entities = {}  # Entities từ router_rewrite
+        final_legal_query = ""  # Legal query từ router_rewrite
+        final_verdict = ""  # Reflector verdict (để gate cache store)
+
         # Buffer để parse thẻ <thinking> từ chuỗi văn bản của Kimi
         tag_buffer = ""
         is_thinking = False
@@ -889,6 +1049,10 @@ class RAGService:
                         yield json.dumps({"type": "process", "content": "Xử lý hội thoại trực tiếp..."}, ensure_ascii=False) + "\n"
                     elif evt_name == "agent_reject":
                         yield json.dumps({"type": "process", "content": "Từ chối câu hỏi ngoại lệ..."}, ensure_ascii=False) + "\n"
+                    elif evt_name == "cache_check":
+                        yield json.dumps({"type": "process", "content": "⚡ Kiểm tra bộ nhớ đệm ngữ nghĩa..."}, ensure_ascii=False) + "\n"
+                    elif evt_name == "generator_cached":
+                        yield json.dumps({"type": "process", "content": "⚡ Phản hồi từ bộ nhớ đệm..."}, ensure_ascii=False) + "\n"
 
                 # ── LLM streaming: chỉ từ generator & agent_direct ──────────
                 if evt_type == "on_chat_model_stream" and evt_meta_node in _STREAM_NODES:
@@ -1053,6 +1217,34 @@ class RAGService:
                                     # Fallback: regex nếu web_sources rỗng
                                     collected_sources.extend(RAGService._extract_web_sources(ctx))
 
+                    # ── Cache: capture answer text from generator for store ──
+                    if evt_name == "generator" and isinstance(output, dict):
+                        for m in (output.get("messages", []) if isinstance(output, dict) else []):
+                            if isinstance(m, AIMessage):
+                                text = _extract_ai_text(m)
+                                if text:
+                                    final_answer_text = text
+
+                    # ── Cache: track route/entities from router_rewrite ──────
+                    if isinstance(output, dict):
+                        if evt_name == "router_rewrite":
+                            final_route = output.get("route", "")
+                            final_entities = output.get("entities", {})
+                            final_legal_query = output.get("legal_query", "")
+                        elif evt_name == "cache_check":
+                            is_cache_hit = output.get("cache_hit", False)
+                        elif evt_name == "reflector":
+                            final_verdict = output.get("reflection", "")
+
+                    # ── generator_cached: emit cached response trực tiếp ─────
+                    if evt_name == "generator_cached" and isinstance(output, dict):
+                        for m in (output.get("messages", []) if isinstance(output, dict) else []):
+                            if isinstance(m, AIMessage):
+                                text = _extract_ai_text(m)
+                                if text:
+                                    final_answer_text = text
+                                    yield json.dumps({"type": "answer", "content": text}, ensure_ascii=False) + "\n"
+
         except Exception as e:
             error_message = str(e)
             error_type = type(e).__name__
@@ -1079,6 +1271,8 @@ class RAGService:
             "totalTime": total_time_ms,
             "graphQueryTime": node_timings.get("retriever"),
             "webSearchTime": node_timings.get("web_search_fallback"),
+            "cacheCheckTime": node_timings.get("cache_check"),
+            "cacheHit": is_cache_hit,
             "inputTokens": total_input_tokens if total_input_tokens > 0 else None,
             "outputTokens": total_output_tokens if total_output_tokens > 0 else None,
             "thinkingTokens": total_thinking_tokens if total_thinking_tokens > 0 else None,
@@ -1089,12 +1283,74 @@ class RAGService:
             "errorType": error_type
         }
 
+        # Breakdown chi tiết để xác định bottleneck theo node.
+        node_breakdown = {
+            "routerRewriteTime": node_timings.get("router_rewrite"),
+            "cacheCheckTime": node_timings.get("cache_check"),
+            "retrievalTime": node_timings.get("retriever"),
+            "reflectorTime": node_timings.get("reflector"),
+            "generatorTime": node_timings.get("generator"),
+            "generatorCachedTime": node_timings.get("generator_cached"),
+            "clarifierTime": node_timings.get("clarifier"),
+            "webSearchTime": node_timings.get("web_search_fallback"),
+        }
+
+        executed_breakdown = {
+            k: v for k, v in node_breakdown.items()
+            if isinstance(v, int)
+        }
+        slowest_node = None
+        if executed_breakdown:
+            slowest_name = max(executed_breakdown, key=executed_breakdown.get)
+            slowest_node = {
+                "node": slowest_name,
+                "durationMs": executed_breakdown[slowest_name],
+            }
+
+        metrics["nodeTimings"] = node_breakdown
+        metrics["slowestNode"] = slowest_node
+
         logging.info(f"[METRICS] Final metrics: {metrics}")
+        logging.info(f"[METRICS] Node breakdown: {node_breakdown}")
+        if slowest_node:
+            logging.info(
+                f"[METRICS] Slowest node: {slowest_node['node']}="
+                f"{slowest_node['durationMs']}ms"
+            )
 
         # Send metrics before metadata and done
         yield json.dumps({"type": "metrics", "content": metrics}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "metadata", "content": {"sources": collected_sources}}, ensure_ascii=False) + "\n"
         yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
+
+        # ── Cache Store (fire-and-forget, chỉ khi verdict=sufficient) ─────
+        if (
+            self._cache
+            and self._cache.is_connected
+            and final_route == "use_tool"
+            and not is_cache_hit
+            and final_verdict == "sufficient"  # chỉ cache response đã qua reflector và được approved
+            and final_answer_text
+            and final_legal_query
+            and not error_message
+        ):
+            import asyncio
+
+            async def _store_cache():
+                try:
+                    await self._cache.store(
+                        query=final_legal_query,
+                        response=final_answer_text,
+                        entities=final_entities,
+                        metadata={
+                            "conversation_id": conversation_id,
+                            "sources_count": len(collected_sources),
+                        },
+                    )
+                except Exception as e:
+                    logging.warning(f"[CACHE] Lỗi khi store vào cache: {e}")
+
+            asyncio.create_task(_store_cache())
 
     # ------------------------------------------------------------------
     # Tools (dùng cho agentic flow)
@@ -1124,6 +1380,8 @@ class RAGService:
         return tools
 
     async def close(self):
+        if self._cache:
+            await self._cache.close()
         if self._driver:
             await self._driver.close()
             logging.info("Đã đóng kết nối Neo4j.")

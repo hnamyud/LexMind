@@ -12,6 +12,7 @@ import {
   SystemStatsResponse,
   FeedbackAnalyticsResponse,
   AIErrorsResponse,
+  CacheAnalyticsResponse,
 } from './interfaces/admin.interface';
 import Redis from 'ioredis';
 import { firstValueFrom, timeout, catchError } from 'rxjs';
@@ -572,6 +573,123 @@ export class AdminService {
         avgInputTokensPerMessage: Math.round(totalInputTokens / (metrics.length || 1)),
         avgOutputTokensPerMessage: Math.round(totalOutputTokens / (metrics.length || 1)),
       },
+    };
+  }
+
+  // ==================== CACHE ANALYTICS ====================
+
+  async getCacheAnalytics(query: StatsQueryDto): Promise<CacheAnalyticsResponse> {
+    const { dateFrom, dateTo } = query;
+
+    const where: any = {};
+    if (dateFrom || dateTo) {
+      where.createdAt = {};
+      if (dateFrom) where.createdAt.gte = new Date(dateFrom);
+      if (dateTo) where.createdAt.lte = new Date(dateTo);
+    }
+
+    // Get all metrics with cache info
+    const [cacheHits, cacheMisses, cachedMetrics, nonCachedMetrics, allMetrics] = await Promise.all([
+      this.prisma.aIMetrics.count({ where: { ...where, cacheHit: true } }),
+      this.prisma.aIMetrics.count({ where: { ...where, cacheHit: false } }),
+      this.prisma.aIMetrics.findMany({
+        where: { ...where, cacheHit: true },
+        select: { totalTime: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.aIMetrics.findMany({
+        where: { ...where, cacheHit: false },
+        select: { totalTime: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.aIMetrics.findMany({
+        where,
+        select: { cacheHit: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+
+    const totalQueries = cacheHits + cacheMisses;
+    const hitRatePercent = totalQueries > 0
+      ? Number(((cacheHits / totalQueries) * 100).toFixed(2))
+      : 0;
+
+    // Percentile helper
+    const percentile = (arr: number[], p: number) => {
+      if (arr.length === 0) return null;
+      const index = Math.ceil((arr.length * p) / 100) - 1;
+      return arr[Math.max(0, index)];
+    };
+
+    // Response time stats for cached queries
+    const cachedTimes = cachedMetrics
+      .map(m => m.totalTime)
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b);
+
+    const cachedAvg = cachedTimes.length > 0
+      ? Math.round(cachedTimes.reduce((s, t) => s + t, 0) / cachedTimes.length)
+      : 0;
+
+    // Response time stats for non-cached queries
+    const nonCachedTimes = nonCachedMetrics
+      .map(m => m.totalTime)
+      .filter((t): t is number => t !== null)
+      .sort((a, b) => a - b);
+
+    const nonCachedAvg = nonCachedTimes.length > 0
+      ? Math.round(nonCachedTimes.reduce((s, t) => s + t, 0) / nonCachedTimes.length)
+      : 0;
+
+    // Time saved estimation
+    const avgTimeSavedMs = Math.max(0, nonCachedAvg - cachedAvg);
+    const totalTimeSavedMs = avgTimeSavedMs * cacheHits;
+
+    // Time series: group by date
+    const timeSeriesMap: Record<string, { hits: number; misses: number }> = {};
+    allMetrics.forEach(m => {
+      const date = m.createdAt.toISOString().split('T')[0];
+      if (!timeSeriesMap[date]) {
+        timeSeriesMap[date] = { hits: 0, misses: 0 };
+      }
+      if (m.cacheHit) {
+        timeSeriesMap[date].hits++;
+      } else {
+        timeSeriesMap[date].misses++;
+      }
+    });
+
+    return {
+      overview: {
+        totalQueries,
+        cacheHits,
+        cacheMisses,
+        hitRatePercent,
+        avgTimeSavedMs,
+        totalTimeSavedMs,
+      },
+      responseTimeComparison: {
+        cached: {
+          avg: cachedAvg,
+          p50: percentile(cachedTimes, 50),
+          p95: percentile(cachedTimes, 95),
+        },
+        nonCached: {
+          avg: nonCachedAvg,
+          p50: percentile(nonCachedTimes, 50),
+          p95: percentile(nonCachedTimes, 95),
+        },
+      },
+      timeSeries: Object.entries(timeSeriesMap)
+        .map(([date, stats]) => ({
+          date,
+          hits: stats.hits,
+          misses: stats.misses,
+          hitRate: (stats.hits + stats.misses) > 0
+            ? Number((stats.hits / (stats.hits + stats.misses)).toFixed(2))
+            : 0,
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
     };
   }
 
