@@ -61,6 +61,7 @@ _TIER1_SITES: list[str] = [
     "moj.gov.vn",
     "quochoi.vn",
     "vbpl.vn",
+    "baochinhphu.vn",
 ]
 
 _TIER2_SITES: list[str] = [
@@ -77,6 +78,7 @@ _DOMAIN_SELECTORS = {
     "vbpl.vn": [".content"],
     "thuvienphapluat.vn": [".content1", ".news-content"],
     "luatvietnam.vn": [".the-document-body"],
+    "baochinhphu.vn": [".detail-content"]
 }
 
 # Tags Firecrawl sẽ loại bỏ khi extract main content

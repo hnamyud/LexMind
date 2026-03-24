@@ -3,19 +3,33 @@ app/tools/graph_retrieval.py
 ────────────────────────────
 Đóng gói chức năng truy xuất đồ thị tri thức (Neo4j) thành LangChain Tool chuẩn.
 
-Chiến lược retrieval 3-prong SONG SONG:
-─────────────────────────────────────────
-  1. Keyword search  — tìm chính xác theo từ khóa (CONTAINS trên name/text)
+Chiến lược retrieval 3-prong SONG SONG với RRF:
+───────────────────────────────────────────────
+  1. Keyword search  — Fulltext Index (Lucene) thay vì CONTAINS → O(log n)
   2. Vector search   — tìm theo ngữ nghĩa tương đồng (embedding cosine)
-  3. Graph traversal — duyệt đồ thị dựa trên entities đã bóc tách từ router
+  3. Graph traversal — duyệt đồ thị qua Fulltext Index + entity-driven
 
-Ba nhánh chạy đồng thời qua asyncio.gather, sau đó merge + deduplicate + rank.
+Ba nhánh chạy đồng thời qua asyncio.gather với timeout guards,
+sau đó merge bằng RRF (Reciprocal Rank Fusion).
+
+Performance Optimizations:
+─────────────────────────
+  ✅ RRF (Reciprocal Rank Fusion) — Không cần normalize scores từ nguồn khác nhau
+  ✅ Fulltext Index thay CONTAINS — O(log n) thay vì O(n) full scan
+  ✅ Parallel Execution — 3 nhánh chạy đồng thời
+  ✅ Timeout Guards — Bảo vệ khỏi slow queries, mỗi nhánh có timeout riêng
 
 Cách dùng trong agentic flow:
 ─────────────────────────────
     from app.tools.graph_retrieval import make_graph_retrieval_tool
 
-    tool = make_graph_retrieval_tool(driver=driver, embed_model=embed_model)
+    tool = make_graph_retrieval_tool(
+        driver=driver,
+        embed_model=embed_model,
+        keyword_timeout=3.0,
+        vector_timeout=5.0,
+        graph_timeout=5.0
+    )
     agent = create_react_agent(llm, tools=[tool], checkpointer=checkpointer)
 
 Schema của tool (input):
@@ -70,12 +84,13 @@ class GraphRetrievalTool(BaseTool):
     """
     LangChain Tool tra cứu đồ thị tri thức pháp lý.
 
-    Thực hiện SONG SONG 3 chiến lược:
-      1. Keyword search  — CONTAINS trên name/text → exact match
+    Thực hiện SONG SONG 3 chiến lược với timeout guards:
+      1. Keyword search  — Fulltext Index (Lucene) → O(log n)
       2. Vector search   — embedding cosine similarity → semantic match
-      3. Graph traversal — entity-driven duyệt đồ thị → structural match
+      3. Graph traversal — Fulltext Index + entity-driven → structural match
 
-    Kết quả 3 nhánh được merge, deduplicate theo node.id, rank theo tổng hợp score.
+    Kết quả 3 nhánh được merge bằng RRF (Reciprocal Rank Fusion):
+      RRF_score(node) = Σ 1/(60 + rank_i)
 
     Attributes
     ----------
@@ -85,6 +100,12 @@ class GraphRetrievalTool(BaseTool):
         Model embedding đã được load sẵn.
     top_k : int
         Số node tìm kiếm tối đa mỗi nhánh (mặc định: 5).
+    keyword_timeout : float
+        Timeout (giây) cho Fulltext keyword search (mặc định: 3.0s).
+    vector_timeout : float
+        Timeout (giây) cho Vector semantic search (mặc định: 5.0s).
+    graph_timeout : float
+        Timeout (giây) cho Graph traversal (mặc định: 5.0s).
     """
 
     # ── Metadata bắt buộc của LangChain Tool ──────────────────────────────
@@ -109,6 +130,20 @@ class GraphRetrievalTool(BaseTool):
     top_k: int = Field(default=5)
     score_threshold: float = Field(default=0.6)  # ngưỡng điểm thấp nhất để chấp nhận kết quả
 
+    # ── Timeout configuration (seconds) ───────────────────────────────────
+    keyword_timeout: float = Field(default=3.0)  # Fulltext search nhanh, timeout thấp
+    vector_timeout: float = Field(default=5.0)   # Vector search có thể chậm hơn
+    graph_timeout: float = Field(default=5.0)    # Graph traversal có thể phức tạp
+
+    # ── RRF Threshold configuration ───────────────────────────────────────
+    # RRF Score Reference (k=60):
+    #   - Top-1 cả 3 nguồn  : ~0.049 (max possible)
+    #   - Top-1 hai nguồn   : ~0.033
+    #   - Top-1 một nguồn   : ~0.016
+    #   - Top-5 một nguồn   : ~0.015
+    # Recommended: 0.025 (strict) | 0.016 (balanced) | 0.010 (lenient)
+    rrf_threshold: float = Field(default=0.016)
+
     # ── Fulltext index state ──────────────────────────────────────────────
     _fulltext_ready: bool = False  # chỉ cần tạo index 1 lần
     _FULLTEXT_INDEX_NAME: str = "legal_fulltext_index"
@@ -119,11 +154,12 @@ class GraphRetrievalTool(BaseTool):
 
     # ── Nhánh 1: Keyword search (Fulltext Index — Lucene) ──────────────────
     # Dùng db.index.fulltext.queryNodes thay vì CONTAINS → O(log n) thay vì O(n)
+    # Note: Không filter theo score ở đây, để RRF xử lý ranking/filtering
     _CYPHER_KEYWORD = """
     CALL db.index.fulltext.queryNodes('legal_fulltext_index', $keyword)
     YIELD node, score
-    WHERE score > 0.5
     WITH node, score
+    ORDER BY score DESC
     LIMIT $top_k
     OPTIONAL MATCH (node)-[r]-(related)
     WHERE type(r) IN [
@@ -177,15 +213,19 @@ class GraphRetrievalTool(BaseTool):
     ORDER BY score DESC
     """
 
-    # ── Nhánh 3: Graph traversal (entity-driven) ─────────────────────────
-    # Tìm Action node khớp với violation, rồi traverse ra tất cả relationships
+    # ── Nhánh 3: Graph traversal (entity-driven, using Fulltext Index) ───
+    # Tìm Action node khớp với violation qua Fulltext Index, rồi traverse
+    # Note: Không filter theo score, để RRF xử lý ranking
     _CYPHER_GRAPH = """
-    MATCH (action:Action)
-    WHERE toLower(action.name) CONTAINS toLower($violation)
-       OR toLower(action.text) CONTAINS toLower($violation)
-    WITH action
+    // Bước 1: Tìm Action nodes qua Fulltext Index (thay vì CONTAINS)
+    CALL db.index.fulltext.queryNodes('legal_fulltext_index', $violation)
+    YIELD node, score
+    WHERE 'Action' IN labels(node)
+    WITH node AS action, score
+    ORDER BY score DESC
     LIMIT $top_k
 
+    // Bước 2: Traverse relationships từ Action nodes tìm được
     OPTIONAL MATCH (action)-[:QUY_DINH_TAI]->(article:Article)
     OPTIONAL MATCH (action)-[:DAN_DEN_HAU_QUA]->(consequence:Consequence)
     OPTIONAL MATCH (action)-[:DIEU_KIEN_KICH_HOAT]->(condition:Condition)
@@ -206,23 +246,36 @@ class GraphRetrievalTool(BaseTool):
       + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_name: context_cond.name, related_text: context_cond.raw_text})
       + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_name: ref_article.name,  related_text: ref_article.raw_text})
         AS relationships,
-        0.8 AS score,
+        score,
         'graph' AS source
-    ORDER BY action.id
+    ORDER BY score DESC
     """
 
-    # ── Nhánh 3b: Graph traversal bổ sung theo Subject (vehicle_type) ────
+    # ── Nhánh 3b: Graph traversal bổ sung theo Subject (vehicle_type, using Fulltext) ────
+    # Note: Không filter theo score, để RRF xử lý ranking
     _CYPHER_GRAPH_SUBJECT = """
-    MATCH (subj:Subject)
-    WHERE toLower(subj.name) CONTAINS toLower($vehicle_type)
-    WITH subj
+    // Bước 1: Tìm Subject nodes qua Fulltext Index
+    CALL db.index.fulltext.queryNodes('legal_fulltext_index', $vehicle_type)
+    YIELD node AS subj, score AS subj_score
+    WHERE 'Subject' IN labels(subj)
+    WITH subj, subj_score
+    ORDER BY subj_score DESC
     LIMIT 3
+
+    // Bước 2: Tìm nodes liên kết với Subject này
     MATCH (node)-[:AP_DUNG_CHO]->(subj)
-    WHERE toLower(node.name) CONTAINS toLower($violation)
-       OR toLower(node.text) CONTAINS toLower($violation)
-    WITH node, subj
+    WITH node, subj, subj_score
+
+    // Bước 3: Filter nodes theo violation qua Fulltext Index
+    // Note: Đã bỏ score filter - let RRF handle ranking
+    CALL db.index.fulltext.queryNodes('legal_fulltext_index', $violation)
+    YIELD node AS violation_node, score AS violation_score
+    WHERE violation_node.id = node.id
+    WITH node, subj, violation_score
+    ORDER BY violation_score DESC
     LIMIT $top_k
 
+    // Bước 4: Traverse relationships
     OPTIONAL MATCH (node)-[r]-(related)
     WHERE type(r) IN [
         'QUY_DINH_TAI', 'DAN_DEN_HAU_QUA', 'DIEU_KIEN_KICH_HOAT',
@@ -240,9 +293,9 @@ class GraphRetrievalTool(BaseTool):
             related_name: related.name,
             related_text: related.raw_text
         }) AS relationships,
-        0.85 AS score,
+        violation_score AS score,
         'graph_subject' AS source
-    ORDER BY node.id
+    ORDER BY violation_score DESC
     """
 
     # ══════════════════════════════════════════════════════════════════════
@@ -461,7 +514,7 @@ class GraphRetrievalTool(BaseTool):
             return []
 
     # ------------------------------------------------------------------
-    # Merge, deduplicate, rank
+    # Merge, deduplicate, rank using RRF (Reciprocal Rank Fusion)
     # ------------------------------------------------------------------
     @staticmethod
     def _merge_results(
@@ -470,76 +523,108 @@ class GraphRetrievalTool(BaseTool):
         graph_results: list[dict],
     ) -> list[dict]:
         """
-        Gộp kết quả từ 3 nhánh, deduplicate theo node.id, rank theo tổng điểm.
+        Gộp kết quả từ 3 nhánh bằng RRF (Reciprocal Rank Fusion).
 
-        Scoring:
-          - keyword hit  : +0.3  (đánh giá cao exact match)
-          - vector score : score * 0.5 (normalized cosine sim)
-          - graph hit    : +0.2  (structural relevance)
-          - Bonus nếu xuất hiện ở cả 3 nguồn: +0.1
+        RRF Formula:
+            RRF_score(node) = Σ 1/(k + rank_i)
 
-        ⚠️ QUAN TRỌNG: Keyword scores từ Lucene không giới hạn [0,1] (có thể lên đến 20-30)
-        → Normalize về [0,1] trước khi merge để threshold logic hoạt động đúng
+        Trong đó:
+          - k = 60 (constant, theo paper gốc của RRF)
+          - rank_i = vị trí rank của node trong list thứ i (bắt đầu từ 1)
+          - Tổng được tính trên tất cả các list mà node xuất hiện
+
+        Ưu điểm của RRF:
+          ✅ Không cần normalize scores từ các nguồn khác nhau
+          ✅ Tự động cân bằng giữa precision (top results) và diversity
+          ✅ Robust với outliers và score distributions khác nhau
+          ✅ Đã được chứng minh hoạt động tốt trong IR (Information Retrieval)
+
+        References:
+          Cormack, G. V., Clarke, C. L., & Büttcher, S. (2009).
+          "Reciprocal rank fusion outperforms condorcet and individual rank learning methods."
         """
-        # ── Bước 0: Normalize Lucene keyword scores về [0,1] ─────────────────
-        if keyword_results:
-            max_keyword_score = max(r.get("score", 0) or 0 for r in keyword_results)
-            if max_keyword_score > 1.0:  # Chỉ normalize khi cần thiết
-                for r in keyword_results:
-                    original_score = r.get("score", 0) or 0
-                    r["score"] = original_score / max_keyword_score
-                    r["_original_lucene_score"] = original_score  # Debug info
-                logging.info(
-                    f"[Merge] Normalized keyword scores: max={max_keyword_score:.2f} → 1.0"
-                )
+        K_CONSTANT = 60  # RRF constant (tiêu chuẩn trong literature)
 
-        merged: dict[str, dict] = {}  # id → merged record
+        # ── Bước 1: Build rank positions cho mỗi list ────────────────────────
+        # Mỗi node trong mỗi list được gán rank position (1-indexed)
+        rank_maps = {
+            "keyword": {r.get("id"): idx + 1 for idx, r in enumerate(keyword_results) if r.get("id")},
+            "vector":  {r.get("id"): idx + 1 for idx, r in enumerate(vector_results) if r.get("id")},
+            "graph":   {r.get("id"): idx + 1 for idx, r in enumerate(graph_results) if r.get("id")},
+        }
 
-        def _add(records: list[dict], weight: float, source_name: str):
-            for r in records:
-                node_id = r.get("id")
-                if not node_id:
-                    continue
+        # ── Bước 2: Build lookup cho full record data ────────────────────────
+        # Để lấy thông tin chi tiết của node sau khi tính RRF
+        all_records_by_id: dict[str, dict] = {}
+        for r in keyword_results + vector_results + graph_results:
+            node_id = r.get("id")
+            if not node_id:
+                continue
+            if node_id not in all_records_by_id:
+                all_records_by_id[node_id] = r
 
-                raw_score = r.get("score", 0) or 0
+        # ── Bước 3: Tính RRF score cho mỗi node ──────────────────────────────
+        rrf_scores: dict[str, float] = {}
+        node_sources: dict[str, set] = {}  # Track nguồn nào có node này
 
-                if node_id in merged:
-                    existing = merged[node_id]
-                    existing["_weighted_score"] += raw_score * weight
-                    existing["_sources"].add(source_name)
-                    # Merge thêm relationships nếu có mới
-                    existing_rel_ids = {
-                        rel.get("related_id") for rel in existing.get("relationships", [])
-                    }
-                    for rel in r.get("relationships", []):
-                        if rel.get("related_id") and rel["related_id"] not in existing_rel_ids:
-                            existing["relationships"].append(rel)
-                            existing_rel_ids.add(rel["related_id"])
-                else:
-                    merged[node_id] = {
-                        **r,
-                        "_weighted_score": raw_score * weight,
-                        "_sources": {source_name},
-                    }
+        for source_name, rank_map in rank_maps.items():
+            for node_id, rank in rank_map.items():
+                # RRF contribution từ source này
+                rrf_contribution = 1.0 / (K_CONSTANT + rank)
 
-        # Áp dụng trọng số cho từng nguồn
-        _add(keyword_results, weight=0.3, source_name="keyword")
-        _add(vector_results,  weight=0.5, source_name="vector")
-        _add(graph_results,   weight=0.2, source_name="graph")
+                if node_id not in rrf_scores:
+                    rrf_scores[node_id] = 0.0
+                    node_sources[node_id] = set()
 
-        # Bonus nếu xuất hiện ở nhiều nguồn (multi-source boost)
-        for record in merged.values():
-            n_sources = len(record["_sources"])
-            if n_sources >= 3:
-                record["_weighted_score"] += 0.15  # xuất hiện cả 3 nguồn → rất liên quan
-            elif n_sources >= 2:
-                record["_weighted_score"] += 0.08  # xuất hiện 2 nguồn
+                rrf_scores[node_id] += rrf_contribution
+                node_sources[node_id].add(source_name)
 
-        # Sắp xếp theo tổng điểm giảm dần
+        # ── Bước 4: Merge relationships từ tất cả sources ────────────────────
+        merged_records: dict[str, dict] = {}
+
+        for node_id, rrf_score in rrf_scores.items():
+            # Lấy record base (từ source nào cũng được)
+            base_record = all_records_by_id[node_id].copy()
+
+            # Merge relationships từ tất cả sources
+            all_relationships = []
+            seen_rel_ids = set()
+
+            for source_name, rank_map in rank_maps.items():
+                if node_id in rank_map:
+                    # Tìm record gốc từ source này
+                    source_records = {
+                        "keyword": keyword_results,
+                        "vector": vector_results,
+                        "graph": graph_results,
+                    }[source_name]
+
+                    for r in source_records:
+                        if r.get("id") == node_id:
+                            for rel in r.get("relationships", []):
+                                rel_id = rel.get("related_id")
+                                if rel_id and rel_id not in seen_rel_ids:
+                                    all_relationships.append(rel)
+                                    seen_rel_ids.add(rel_id)
+                            break
+
+            merged_records[node_id] = {
+                **base_record,
+                "relationships": all_relationships,
+                "_rrf_score": rrf_score,
+                "_sources": node_sources[node_id],
+            }
+
+        # ── Bước 5: Sắp xếp theo RRF score giảm dần ──────────────────────────
         sorted_results = sorted(
-            merged.values(),
-            key=lambda x: x["_weighted_score"],
+            merged_records.values(),
+            key=lambda x: x["_rrf_score"],
             reverse=True,
+        )
+
+        logging.info(
+            f"[RRF Merge] Processed {len(sorted_results)} unique nodes. "
+            f"Top-3 scores: {[f'{r['_rrf_score']:.4f}' for r in sorted_results[:3]]}"
         )
 
         return sorted_results
@@ -555,7 +640,7 @@ class GraphRetrievalTool(BaseTool):
         context_blocks = []
         for r in records:
             sources = ", ".join(sorted(r.get("_sources", set())))
-            score = r.get("_weighted_score", 0)
+            score = r.get("_rrf_score", 0)  # Changed from _weighted_score to _rrf_score
             label = r.get("label", "Unknown")
             name = r.get("name", "")
 
@@ -668,35 +753,52 @@ class GraphRetrievalTool(BaseTool):
             loop = asyncio.get_running_loop()
             vector = await loop.run_in_executor(None, self._embed, query)
 
-            # ── Bước 2: Chạy SONG SONG 3 nhánh ──────────────────────────
+            # ── Bước 2: Chạy SONG SONG 3 nhánh với Timeout Guard ────────────
             logging.info(
-                f"[GraphRetrievalTool] 🚀 Bắt đầu parallel search: "
-                f"keyword='{query[:50]}' | "
+                f"[GraphRetrievalTool] 🚀 Bắt đầu parallel search với timeouts: "
+                f"keyword={self.keyword_timeout}s, vector={self.vector_timeout}s, "
+                f"graph={self.graph_timeout}s | "
+                f"query='{query[:50]}' | "
                 f"violation='{entities.get('violation', '')[:50]}' | "
                 f"vehicle='{entities.get('vehicle_type', '')}'"
             )
 
-            keyword_task = self._search_keyword(query)
-            vector_task  = self._search_vector(vector)
-            graph_task   = self._search_graph(entities)
+            # Wrap mỗi search với timeout guard
+            async def search_with_timeout(coro, timeout: float, branch_name: str):
+                """Helper để wrap search với timeout và error handling."""
+                try:
+                    return await asyncio.wait_for(coro, timeout=timeout)
+                except asyncio.TimeoutError:
+                    logging.warning(
+                        f"[{branch_name}] ⏱️ Timeout after {timeout}s - returning empty results"
+                    )
+                    return []
+                except Exception as e:
+                    logging.error(f"[{branch_name}] Exception: {e}")
+                    return []
+
+            # Tạo tasks với timeout guards
+            keyword_task = search_with_timeout(
+                self._search_keyword(query),
+                self.keyword_timeout,
+                "Keyword"
+            )
+            vector_task = search_with_timeout(
+                self._search_vector(vector),
+                self.vector_timeout,
+                "Vector"
+            )
+            graph_task = search_with_timeout(
+                self._search_graph(entities),
+                self.graph_timeout,
+                "Graph"
+            )
 
             keyword_results, vector_results, graph_results = await asyncio.gather(
                 keyword_task,
                 vector_task,
                 graph_task,
-                return_exceptions=True,
             )
-
-            # Xử lý exceptions từ gather
-            if isinstance(keyword_results, Exception):
-                logging.error(f"[Keyword] Exception: {keyword_results}")
-                keyword_results = []
-            if isinstance(vector_results, Exception):
-                logging.error(f"[Vector] Exception: {vector_results}")
-                vector_results = []
-            if isinstance(graph_results, Exception):
-                logging.error(f"[Graph] Exception: {graph_results}")
-                graph_results = []
 
             logging.info(
                 f"[GraphRetrievalTool] ✅ Parallel search hoàn tất: "
@@ -718,18 +820,18 @@ class GraphRetrievalTool(BaseTool):
 
             # ── Bước 3.5: THRESHOLDING — kiểm tra chất lượng kết quả ─────
             # Nếu điểm cao nhất vẫn dưới ngưỡng → Graph "đầu hàng" và signal cho Web Search
-            max_score = merged[0].get("_weighted_score", 0) if merged else 0
+            max_score = merged[0].get("_rrf_score", 0) if merged else 0
 
-            if max_score < self.score_threshold:
+            if max_score < self.rrf_threshold:
                 low_confidence_msg = (
                     f"⚠️ [LOW_CONFIDENCE_THRESHOLD] Kết quả từ đồ thị có độ tin cậy thấp "
-                    f"(max_score={max_score:.3f} < threshold={self.score_threshold}). "
+                    f"(max_rrf_score={max_score:.4f} < threshold={self.rrf_threshold}). "
                     f"Dữ liệu có thể chưa cập nhật hoặc không đủ chi tiết. "
                     f"Nên chuyển sang tìm kiếm web để bổ sung."
                 )
                 logging.warning(
-                    f"[GraphRetrievalTool] Threshold check failed: "
-                    f"max_score={max_score:.3f} < {self.score_threshold}"
+                    f"[GraphRetrievalTool] RRF threshold check failed: "
+                    f"max_score={max_score:.4f} < {self.rrf_threshold}"
                 )
                 self._write_query_log(query, entities, low_confidence_msg)
                 return low_confidence_msg
@@ -758,6 +860,10 @@ def make_graph_retrieval_tool(
     embed_model: Any,
     top_k: int = 5,
     score_threshold: float = 0.6,
+    keyword_timeout: float = 3.0,
+    vector_timeout: float = 5.0,
+    graph_timeout: float = 5.0,
+    rrf_threshold: float = 0.016,
 ) -> GraphRetrievalTool:
     """
     Tạo và trả về instance của GraphRetrievalTool.
@@ -771,8 +877,18 @@ def make_graph_retrieval_tool(
     top_k : int
         Số lượng node tìm kiếm tối đa mỗi nhánh.
     score_threshold : float
-        Ngưỡng điểm tối thiểu để chấp nhận kết quả (mặc định: 0.6).
-        Nếu max_score < threshold → Graph "đầu hàng" và signal cho Web Search.
+        (Legacy parameter, không còn sử dụng với RRF).
+    keyword_timeout : float
+        Timeout (giây) cho Fulltext keyword search (mặc định: 3.0s).
+    vector_timeout : float
+        Timeout (giây) cho Vector semantic search (mặc định: 5.0s).
+    graph_timeout : float
+        Timeout (giây) cho Graph traversal (mặc định: 5.0s).
+    rrf_threshold : float
+        RRF score threshold tối thiểu để chấp nhận kết quả (mặc định: 0.016).
+        - 0.025: Strict (≥2 sources, top ranks)
+        - 0.016: Balanced (≥1 source, top-1) — Recommended
+        - 0.010: Lenient (accept most results)
 
     Returns
     -------
@@ -781,7 +897,14 @@ def make_graph_retrieval_tool(
 
     Example
     -------
-    >>> tool = make_graph_retrieval_tool(driver, embed_model, top_k=5, score_threshold=0.6)
+    >>> tool = make_graph_retrieval_tool(
+    ...     driver, embed_model,
+    ...     top_k=5,
+    ...     keyword_timeout=3.0,
+    ...     vector_timeout=5.0,
+    ...     graph_timeout=5.0,
+    ...     rrf_threshold=0.016  # Balanced
+    ... )
     >>> agent = create_react_agent(llm, tools=[tool], checkpointer=checkpointer)
     """
     return GraphRetrievalTool(
@@ -789,4 +912,8 @@ def make_graph_retrieval_tool(
         embed_model=embed_model,
         top_k=top_k,
         score_threshold=score_threshold,
+        keyword_timeout=keyword_timeout,
+        vector_timeout=vector_timeout,
+        graph_timeout=graph_timeout,
+        rrf_threshold=rrf_threshold,
     )

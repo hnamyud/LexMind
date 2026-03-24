@@ -85,7 +85,7 @@ def _load_prompt(filename: str) -> str:
     return data["template"]
 
 class RAGService:
-    _REFLECTOR_SCORE_THRESHOLD: float = 0.6
+    _REFLECTOR_SCORE_THRESHOLD: float = 0.012
     _RE_CONTEXT_SOURCE_HEADER = re.compile(
         r"^---\s*Nguồn\s+\S+\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---\s*$",
         re.MULTILINE,
@@ -176,17 +176,10 @@ class RAGService:
                 google_api_key=self._api_key,
                 temperature=0,
                 include_thoughts=True,
-                thinking_budget=2048,  # Giảm 75% từ 8K → tiết kiệm cost+latency, vẫn đủ cho reasoning cơ bản
+                thinking_budget=4096,  
                 stream_usage=True,
                 streaming=True,  # Enable streaming for LangGraph astream_events
             )
-
-            # self._llm = ChatOpenAI(
-            #     model="gpt-5.2",
-            #     api_key='proxypal',
-            #     base_url="http://localhost:8317/v1",
-            #     temperature=0
-            # )
 
             self._llm_router = ChatGoogleGenerativeAI(
                 model="gemini-3.1-flash-lite-preview",
@@ -194,11 +187,13 @@ class RAGService:
                 temperature=0,       
             )
 
-            # LLM riêng cho reflector - không dùng thinking budget để giảm token & latency
+            # LLM riêng cho reflector
             self._llm_reflector = ChatGoogleGenerativeAI(
                 model="gemini-3-flash-preview",
                 google_api_key=self._api_key,
                 temperature=0,
+                include_thoughts=True,
+                thinking_budget=1024,
             )
             logging.info("✅ Kết nối Gemini API thành công! (ChatGoogleGenerativeAI)")
         except Exception as e:
@@ -935,6 +930,95 @@ class RAGService:
         r"---\s*Nguồn\s+(\S+)\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---"
     )
     _RE_WEB_URL = re.compile(r"^URL\s*:\s*(https?://\S+)", re.MULTILINE)
+    # Nhận diện các chuỗi chứa "Điều", "Khoản", "Điểm" (có thể độc lập hoặc kết hợp)
+    # Bắt được: "Điều 18", "Khoản 8", "Điểm a", "Điểm a Khoản 8 Điều 18", "Khoản 5 Điều 26", v.v.
+    _RE_DIEU_KHOAN = re.compile(
+        r"(?:Điểm\s+[a-zđ0-9]+\s+)?(?:Khoản\s+\d+\s+)?(?:Điều\s+\d+)|(?:Khoản\s+\d+)|(?:Điểm\s+[a-zđ0-9]+(?:\s+Khoản\s+\d+)?)",
+        re.IGNORECASE,
+    )
+    # Parse entity IDs dạng: d18_k8_a → "Điều 18 Khoản 8 Điểm a"
+    _RE_ENTITY_ID = re.compile(
+        r"\b(d(\d+)(?:_k(\d+))?(?:_([a-zđ]+))?)\b",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _parse_legal_anchors(context: str) -> list[str]:
+        """
+        Parse nhanh các anchor pháp lý (Điều/Khoản/Điểm) từ context trả về bởi retriever.
+        Lọc bỏ các block có score thấp so với top score để tránh nhiễu.
+        Dedup + giữ thứ tự xuất hiện, tối đa 8 anchors để tránh quá dài.
+
+        Parse từ 2 nguồn:
+        1. Entity IDs dạng: d18_k8_a → "Điều 18 Khoản 8 Điểm a"
+        2. Text anchors dạng: "Điều 18", "Khoản 8", "Điểm a Khoản 8", v.v.
+        """
+        if not context or "Không tìm thấy" in context:
+            return []
+
+        # Tách context thành các block bằng header chứa score
+        headers = list(RAGService._RE_GRAPH_SOURCE.finditer(context))
+        valid_context_text = context
+
+        if headers:
+            try:
+                max_score = float(headers[0].group(2))
+            except ValueError:
+                max_score = 0.0
+
+            threshold = max_score * 0.5  # Giảm từ 0.75 → 0.5 để bắt được nhiều anchors hơn
+            kept_blocks = []
+
+            for i, match in enumerate(headers):
+                try:
+                    score = float(match.group(2))
+                except ValueError:
+                    score = 0.0
+
+                if score >= threshold:
+                    start_idx = match.end()
+                    end_idx = headers[i+1].start() if i+1 < len(headers) else len(context)
+                    kept_blocks.append(context[start_idx:end_idx])
+
+            if kept_blocks:
+                valid_context_text = "\n".join(kept_blocks)
+
+        seen: set[str] = set()
+        anchors: list[str] = []
+
+        def capitalize_kw(match_obj):
+            return match_obj.group(0).capitalize()
+
+        # 1. Parse entity IDs (d18_k8_a → "Điều 18 Khoản 8 Điểm a")
+        for m in RAGService._RE_ENTITY_ID.finditer(valid_context_text):
+            full_id, dieu_num, khoan_num, diem_letter = m.groups()
+            parts = []
+            if dieu_num:
+                parts.append(f"Điều {dieu_num}")
+            if khoan_num:
+                parts.append(f"Khoản {khoan_num}")
+            if diem_letter:
+                parts.append(f"Điểm {diem_letter}")
+
+            if parts:
+                anchor = " ".join(parts)
+                key = anchor.lower()
+                if key not in seen:
+                    seen.add(key)
+                    anchors.append(anchor)
+
+        # 2. Parse text anchors (Điều X, Khoản Y, Điểm Z, v.v.)
+        for m in RAGService._RE_DIEU_KHOAN.finditer(valid_context_text):
+            token = m.group(0).strip()
+            # Clean up token (e.g "điểm a khoản 1 điều 32" → "Điểm a Khoản 1 Điều 32")
+            token_clean = re.sub(r'(điểm|khoản|điều|mục)', capitalize_kw, token, flags=re.IGNORECASE)
+
+            key = token_clean.lower()
+            if key not in seen and "Điều này" not in token_clean:  # Loại bỏ "Điều này"
+                seen.add(key)
+                anchors.append(token_clean)
+
+        return anchors[:8]  # giới hạn 8 anchors
 
     @staticmethod
     def _extract_graph_sources(context: str) -> list[dict]:
@@ -1205,6 +1289,15 @@ class RAGService:
                         if ctx and isinstance(ctx, str):
                             if evt_name == "retriever":
                                 collected_sources.extend(RAGService._extract_graph_sources(ctx))
+                                # ── Yield legal anchor process event ─────────
+                                anchors = RAGService._parse_legal_anchors(ctx)
+                                if anchors:
+                                    # Lấy tối đa 3 anchors đầu tiên để hiển thị thành 2-3 dòng process (mỗi điều là 1 process)
+                                    for anchor in anchors[:3]:
+                                        yield json.dumps(
+                                            {"type": "process", "content": f"📖 Đang tham khảo: {anchor}"},
+                                            ensure_ascii=False,
+                                        ) + "\n"
                             elif evt_name == "web_search_fallback":
                                 # Lấy danh sách web sources có cấu trúc từ state
                                 ws = output.get("web_sources", [])
@@ -1363,7 +1456,7 @@ class RAGService:
                 driver=self._driver,
                 embed_model=self._embed_model,
                 top_k=5,
-                score_threshold=0.6,  # Ngưỡng thấp nhất để chấp nhận kết quả (thấp hơn → force web search)
+                score_threshold=0.010,  # Ngưỡng thấp nhất để chấp nhận kết quả (thấp hơn → force web search)
             )
         ]
 
