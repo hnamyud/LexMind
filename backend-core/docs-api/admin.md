@@ -8,7 +8,7 @@ Module này cung cấp các endpoint dành riêng cho quản trị viên (Admin)
 
 ---
 
-## 1. System Monitoring (Phase 3) 🚀
+## 1. System Monitoring
 
 Các API giám sát sức khỏe và thống kê tổng quan hệ thống.
 
@@ -336,6 +336,7 @@ Theo dõi hiệu suất kỹ thuật và các lỗi phát sinh từ AI Service.
 
 
 ---
+
 
 ## Data Objects (DTOs)
 

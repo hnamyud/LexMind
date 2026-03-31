@@ -3,20 +3,25 @@ app/tools/graph_retrieval.py
 ────────────────────────────
 Đóng gói chức năng truy xuất đồ thị tri thức (Neo4j) thành LangChain Tool chuẩn.
 
-Chiến lược retrieval 3-prong SONG SONG với RRF:
+Chiến lược retrieval 4-prong SONG SONG với RRF:
 ───────────────────────────────────────────────
-  1. Keyword search  — Fulltext Index (Lucene) thay vì CONTAINS → O(log n)
-  2. Vector search   — tìm theo ngữ nghĩa tương đồng (embedding cosine)
-  3. Graph traversal — duyệt đồ thị qua Fulltext Index + entity-driven
+  1. Keyword search      — Fulltext Index (Lucene) thay vì CONTAINS → O(log n)
+  2. Vector search       — tìm theo ngữ nghĩa tương đồng (embedding cosine)
+  3. Graph traversal     — duyệt đồ thị qua Fulltext Index + entity-driven
+  4. Consequence-first   — tìm Consequence nodes trước, traverse ngược về Action
 
-Ba nhánh chạy đồng thời qua asyncio.gather với timeout guards,
+Bốn nhánh chạy đồng thời qua asyncio.gather với timeout guards,
 sau đó merge bằng RRF (Reciprocal Rank Fusion).
+
+Post-Processing Enhancement:
+────────────────────────────
+  ✅ Vehicle-Aware Boosting — Nhân điểm 1.3x cho kết quả khớp loại xe (trong Nghị định 168)
 
 Performance Optimizations:
 ─────────────────────────
   ✅ RRF (Reciprocal Rank Fusion) — Không cần normalize scores từ nguồn khác nhau
   ✅ Fulltext Index thay CONTAINS — O(log n) thay vì O(n) full scan
-  ✅ Parallel Execution — 3 nhánh chạy đồng thời
+  ✅ Parallel Execution — 4 nhánh chạy đồng thời
   ✅ Timeout Guards — Bảo vệ khỏi slow queries, mỗi nhánh có timeout riêng
 
 Cách dùng trong agentic flow:
@@ -28,7 +33,10 @@ Cách dùng trong agentic flow:
         embed_model=embed_model,
         keyword_timeout=3.0,
         vector_timeout=5.0,
-        graph_timeout=5.0
+        graph_timeout=5.0,
+        consequence_timeout=3.0,
+        vehicle_boost_enabled=True,
+        vehicle_boost_multiplier=1.3
     )
     agent = create_react_agent(llm, tools=[tool], checkpointer=checkpointer)
 
@@ -51,6 +59,120 @@ import neo4j
 from langchain_core.tools import tool, BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun, AsyncCallbackManagerForToolRun
 from pydantic import BaseModel, Field
+import re
+
+logger = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Pattern Detection & Keyword Extraction for Consequence-First Queries
+# ══════════════════════════════════════════════════════════════════════
+
+# Patterns to detect consequence-first queries (queries starting from penalties/fines)
+CONSEQUENCE_PATTERNS = {
+    "fine_amount": [
+        r"phạt\s+(\d+)\s*(triệu|tr|nghìn|ngàn|đồng)",  # "phạt 5 triệu"
+        r"mức\s+phạt\s+(\d+)",                          # "mức phạt 5 triệu"
+        r"(\d+)\s*(triệu|tr|nghìn)\s+(lỗi|vi phạm|phạt)",   # "5 triệu lỗi gì" or "8 triệu phạt lỗi gì"
+    ],
+    "license_suspension": [
+        r"tước\s+(giấy phép|bằng|gplx)\s+(\d+)\s*(tháng|năm)",  # "tước bằng 3 tháng"
+        r"bị\s+tước\s+bằng",                                     # "bị tước bằng"
+    ],
+    "points_deduction": [
+        r"trừ\s+(\d+)\s*điểm",                          # "trừ 4 điểm"
+        r"bị\s+trừ\s+điểm",                             # "bị trừ điểm"
+    ],
+}
+
+
+def _detect_consequence_query(query: str) -> bool:
+    """
+    Check if query is asking about consequences first (fines, penalties, license suspension).
+
+    Parameters
+    ----------
+    query : str
+        User query to analyze.
+
+    Returns
+    -------
+    bool
+        True if query matches any consequence pattern, False otherwise.
+    """
+    query_lower = query.lower()
+    for category, patterns in CONSEQUENCE_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, query_lower):
+                return True
+    return False
+
+
+def _extract_consequence_keyword(query: str) -> str:
+    """
+    Extract search keyword for Consequence nodes from query.
+
+    Priority order:
+    1. Explicit fine amounts: "5 triệu" → "Phạt tiền 5.000.000"
+    2. License suspension: "tước bằng 3 tháng" → "tước giấy phép 3 tháng"
+    3. Points deduction: "trừ 4 điểm" → "trừ điểm 04 điểm"
+    4. General consequence terms: fallback to original query
+
+    Parameters
+    ----------
+    query : str
+        User query containing consequence terms.
+
+    Returns
+    -------
+    str
+        Optimized keyword for searching Consequence nodes.
+    """
+    query_lower = query.lower()
+
+    # Priority 1: Extract fine amounts
+    fine_match = re.search(r'(\d+)\s*(triệu|tr)', query_lower)
+    if fine_match:
+        amount = int(fine_match.group(1))
+        return f"Phạt tiền {amount}.000.000 đồng"
+
+    # Priority 2: License suspension duration
+    license_match = re.search(r'tước.*(bằng|giấy phép|gplx).*?(\d+)\s*(tháng|năm)', query_lower)
+    if license_match:
+        duration = license_match.group(2)
+        unit = license_match.group(3)
+        return f"tước quyền sử dụng giấy phép lái xe {duration} {unit}"
+
+    # Priority 3: Points deduction
+    points_match = re.search(r'trừ.*?(\d+)\s*điểm', query_lower)
+    if points_match:
+        points = points_match.group(1).zfill(2)  # "4" → "04"
+        return f"trừ điểm giấy phép lái xe {points} điểm"
+
+    # Fallback: use original query
+    return query
+
+
+def _escape_lucene(text: str) -> str:
+    """Escape Lucene special characters to prevent TokenMgrError in fulltext queries."""
+    if not text:
+        return ""
+    # Lucene special chars: + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
+    special = r'[+\-&|!(){}\[\]^"~*?:\\/]'
+    return re.sub(special, r'\\\g<0>', text)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Vehicle Type Normalization and Aliases for Vehicle-Aware Boosting
+# ══════════════════════════════════════════════════════════════════════
+
+VEHICLE_ALIASES = {
+    "xe máy": ["xe máy", "mô tô", "xe mô tô", "xe gắn máy"],
+    "ô tô": ["ô tô", "xe ô tô", "xe con"],
+    "xe tải": ["xe tải", "xe chở hàng", "xe chở hàng bốn bánh"],
+    "xe khách": ["xe khách", "xe chở người", "xe bus"],
+    "xe đạp điện": ["xe đạp điện", "xe máy điện"],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +256,7 @@ class GraphRetrievalTool(BaseTool):
     keyword_timeout: float = Field(default=3.0)  # Fulltext search nhanh, timeout thấp
     vector_timeout: float = Field(default=5.0)   # Vector search có thể chậm hơn
     graph_timeout: float = Field(default=5.0)    # Graph traversal có thể phức tạp
+    consequence_timeout: float = Field(default=3.0)  # Consequence-first branch (fast, like keyword)
 
     # ── RRF Threshold configuration ───────────────────────────────────────
     # RRF Score Reference (k=60):
@@ -143,6 +266,16 @@ class GraphRetrievalTool(BaseTool):
     #   - Top-5 một nguồn   : ~0.015
     # Recommended: 0.025 (strict) | 0.016 (balanced) | 0.010 (lenient)
     rrf_threshold: float = Field(default=0.016)
+
+    # ── Vehicle-Aware Boosting configuration ──────────────────────────────
+    vehicle_boost_enabled: bool = Field(
+        default=True,
+        description="Enable vehicle-type aware score boosting for results matching user's vehicle type"
+    )
+    vehicle_boost_multiplier: float = Field(
+        default=1.3,
+        description="Score multiplier for vehicle-matching results (recommended: 1.3)"
+    )
 
     # ── Fulltext index state ──────────────────────────────────────────────
     _fulltext_ready: bool = False  # chỉ cần tạo index 1 lần
@@ -298,6 +431,46 @@ class GraphRetrievalTool(BaseTool):
     ORDER BY violation_score DESC
     """
 
+    # ── Nhánh 4: Consequence-First Lookup (Backward Traversal) ───────────────
+    # Tìm Consequence nodes trước, sau đó traverse ngược về Action nodes.
+    # Kích hoạt khi phát hiện query hỏi về mức phạt/hậu quả (e.g., "phạt 5 triệu lỗi gì?").
+    _CYPHER_CONSEQUENCE_FIRST = """
+    // Step 1: Search Consequence nodes via Fulltext Index
+    CALL db.index.fulltext.queryNodes('legal_fulltext_index', $consequence_keyword)
+    YIELD node, score
+    WHERE 'Consequence' IN labels(node)
+    WITH node AS consequence, score
+    ORDER BY score DESC
+    LIMIT $top_k
+
+    // Step 2: Find Action nodes that point TO this Consequence (backward traversal)
+    MATCH (action:Action)-[:DAN_DEN_HAU_QUA]->(consequence)
+
+    // Step 3: Gather full context from Action node
+    OPTIONAL MATCH (action)-[:QUY_DINH_TAI]->(article:Article)
+    OPTIONAL MATCH (action)-[:DIEU_KIEN_KICH_HOAT]->(condition:Condition)
+    OPTIONAL MATCH (action)-[:AP_DUNG_CHO]->(subject:Subject)
+    OPTIONAL MATCH (action)-[:TRONG_TRUONG_HOP]->(context_cond:Condition)
+    OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article:Article)
+
+    RETURN
+        action.id         AS id,
+        action.text       AS text,
+        action.raw_text   AS raw_content,
+        action.name       AS name,
+        'Action'          AS label,
+        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_name: article.name,      related_text: article.raw_text})
+      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_name: consequence.name,  related_text: consequence.raw_text})
+      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_name: condition.name,    related_text: condition.raw_text})
+      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_name: subject.name,      related_text: subject.raw_text})
+      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_name: context_cond.name, related_text: context_cond.raw_text})
+      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_name: ref_article.name,  related_text: ref_article.raw_text})
+        AS relationships,
+        score,
+        'consequence_first' AS source
+    ORDER BY score DESC
+    """
+
     # ══════════════════════════════════════════════════════════════════════
     # Relationship label → tên tiếng Việt (dùng khi format output)
     # ══════════════════════════════════════════════════════════════════════
@@ -421,6 +594,7 @@ class GraphRetrievalTool(BaseTool):
 
         # Đảm bảo index tồn tại trước khi query
         await self._ensure_fulltext_index()
+        escaped_keyword = _escape_lucene(keyword.strip())
 
         try:
             async with self.driver.session(
@@ -429,7 +603,7 @@ class GraphRetrievalTool(BaseTool):
             ) as session:
                 result = await session.run(
                     self._CYPHER_KEYWORD,
-                    keyword=keyword.strip(),
+                    keyword=escaped_keyword,
                     top_k=self.top_k,
                 )
                 records = await result.data()
@@ -471,6 +645,8 @@ class GraphRetrievalTool(BaseTool):
         """Duyệt đồ thị dựa trên entities đã bóc tách."""
         violation = (entities.get("violation") or "").strip()
         vehicle_type = (entities.get("vehicle_type") or "").strip()
+        escaped_violation = _escape_lucene(violation)
+        escaped_vehicle_type = _escape_lucene(vehicle_type)
 
         if not violation:
             return []
@@ -485,7 +661,7 @@ class GraphRetrievalTool(BaseTool):
                 # 3a: Traversal theo violation (Action → relationships)
                 result_main = await session.run(
                     self._CYPHER_GRAPH,
-                    violation=violation,
+                    violation=escaped_violation,
                     top_k=self.top_k,
                 )
                 records_main = await result_main.data()
@@ -495,8 +671,8 @@ class GraphRetrievalTool(BaseTool):
                 if vehicle_type:
                     result_subj = await session.run(
                         self._CYPHER_GRAPH_SUBJECT,
-                        violation=violation,
-                        vehicle_type=vehicle_type,
+                        violation=escaped_violation,
+                        vehicle_type=escaped_vehicle_type,
                         top_k=self.top_k,
                     )
                     records_subject = await result_subj.data()
@@ -514,6 +690,61 @@ class GraphRetrievalTool(BaseTool):
             return []
 
     # ------------------------------------------------------------------
+    # Nhánh 4: Consequence-First Lookup
+    # ------------------------------------------------------------------
+    async def _search_consequence_first(
+        self, query: str, entities: dict
+    ) -> list[dict]:
+        """
+        Nhánh 4: Consequence-first lookup.
+
+        Tìm Consequence nodes trước, sau đó traverse ngược về Action.
+        Kích hoạt khi phát hiện query hỏi về mức phạt/hậu quả.
+
+        Parameters
+        ----------
+        query : str
+            Original user query.
+        entities : dict
+            Extracted entities (not used in detection, but available).
+
+        Returns
+        -------
+        list[dict]
+            List of Action nodes found via backward traversal from Consequences.
+        """
+        # Check if query is a consequence-first query
+        if not _detect_consequence_query(query):
+            return []  # Skip if not a consequence query
+
+        consequence_keyword = _extract_consequence_keyword(query)
+        escaped_consequence_keyword = _escape_lucene(consequence_keyword)
+
+        logging.info(
+            f"[ConsequenceFirst] Detected consequence query. "
+            f"Keyword: {consequence_keyword}"
+        )
+
+        try:
+            async with self.driver.session(
+                database="neo4j",
+                default_access_mode=neo4j.READ_ACCESS,
+            ) as session:
+                result = await session.run(
+                    self._CYPHER_CONSEQUENCE_FIRST,
+                    consequence_keyword=escaped_consequence_keyword,
+                    top_k=self.top_k,
+                )
+                records = await result.data()
+
+                logging.info(f"[ConsequenceFirst] Found {len(records)} Action nodes via backward traversal")
+                return records
+
+        except Exception as e:
+            logging.error(f"[ConsequenceFirst] Query failed: {e}")
+            return []
+
+    # ------------------------------------------------------------------
     # Merge, deduplicate, rank using RRF (Reciprocal Rank Fusion)
     # ------------------------------------------------------------------
     @staticmethod
@@ -521,9 +752,12 @@ class GraphRetrievalTool(BaseTool):
         keyword_results: list[dict],
         vector_results: list[dict],
         graph_results: list[dict],
+        consequence_results: list[dict],  # NEW: 4th branch
     ) -> list[dict]:
         """
-        Gộp kết quả từ 3 nhánh bằng RRF (Reciprocal Rank Fusion).
+        Gộp kết quả từ 4 nhánh bằng RRF (Reciprocal Rank Fusion).
+
+        Chiến lược mới: Keyword + Vector + Graph + ConsequenceFirst
 
         RRF Formula:
             RRF_score(node) = Σ 1/(k + rank_i)
@@ -551,12 +785,13 @@ class GraphRetrievalTool(BaseTool):
             "keyword": {r.get("id"): idx + 1 for idx, r in enumerate(keyword_results) if r.get("id")},
             "vector":  {r.get("id"): idx + 1 for idx, r in enumerate(vector_results) if r.get("id")},
             "graph":   {r.get("id"): idx + 1 for idx, r in enumerate(graph_results) if r.get("id")},
+            "consequence_first": {r.get("id"): idx + 1 for idx, r in enumerate(consequence_results) if r.get("id")},
         }
 
         # ── Bước 2: Build lookup cho full record data ────────────────────────
         # Để lấy thông tin chi tiết của node sau khi tính RRF
         all_records_by_id: dict[str, dict] = {}
-        for r in keyword_results + vector_results + graph_results:
+        for r in keyword_results + vector_results + graph_results + consequence_results:
             node_id = r.get("id")
             if not node_id:
                 continue
@@ -622,12 +857,98 @@ class GraphRetrievalTool(BaseTool):
             reverse=True,
         )
 
+        top_scores = [f"{r.get('_rrf_score', 0):.4f}" for r in sorted_results[:3]]
         logging.info(
             f"[RRF Merge] Processed {len(sorted_results)} unique nodes. "
-            f"Top-3 scores: {[f'{r['_rrf_score']:.4f}' for r in sorted_results[:3]]}"
+            f"Top-3 scores: {top_scores}"
         )
 
         return sorted_results
+
+    # ------------------------------------------------------------------
+    # Vehicle-Aware Boosting (Post-RRF)
+    # ------------------------------------------------------------------
+    def _apply_vehicle_boost(
+        self,
+        merged_results: list[dict],
+        entities: dict
+    ) -> list[dict]:
+        """
+        Apply vehicle-type aware boosting to RRF scores.
+
+        Boosts results that have [:AP_DUNG_CHO] relationships matching
+        the extracted vehicle_type from entities.
+
+        Parameters
+        ----------
+        merged_results : list[dict]
+            Results after RRF merge (with _rrf_score).
+        entities : dict
+            Extracted entities with 'vehicle_type' key.
+
+        Returns
+        -------
+        list[dict]
+            Re-sorted results after applying boost.
+        """
+        if not self.vehicle_boost_enabled:
+            return merged_results
+
+        vehicle_type = (entities.get("vehicle_type") or "").strip().lower()
+
+        if not vehicle_type:
+            return merged_results  # No boost if no vehicle specified
+
+        # Normalize vehicle_type to canonical form
+        canonical_vehicle = vehicle_type
+        for canonical, aliases in VEHICLE_ALIASES.items():
+            if vehicle_type in aliases:
+                canonical_vehicle = canonical
+                break
+
+        # Apply boost
+        boosted_count = 0
+        for result in merged_results:
+            relationships = result.get("relationships", [])
+
+            # Check if this result has AP_DUNG_CHO relationship matching vehicle
+            has_matching_vehicle = False
+            for rel in relationships:
+                if rel.get("rel_type") == "AP_DUNG_CHO":
+                    subject_name = (rel.get("related_name") or "").lower()
+
+                    # Check exact match or alias match
+                    for alias in VEHICLE_ALIASES.get(canonical_vehicle, [canonical_vehicle]):
+                        if alias in subject_name:
+                            has_matching_vehicle = True
+                            break
+
+                    if has_matching_vehicle:
+                        break
+
+            if has_matching_vehicle:
+                original_score = result.get("_rrf_score", 0)
+                boosted_score = original_score * self.vehicle_boost_multiplier
+                result["_rrf_score"] = boosted_score
+                result["_vehicle_boosted"] = True  # For debugging
+                boosted_count += 1
+
+                logging.info(
+                    f"[VehicleBoost] {result['id']}: "
+                    f"{original_score:.4f} → {boosted_score:.4f} "
+                    f"(matched: {canonical_vehicle})"
+                )
+
+        if boosted_count > 0:
+            # Re-sort by boosted scores
+            merged_results = sorted(
+                merged_results,
+                key=lambda x: x.get("_rrf_score", 0),
+                reverse=True
+            )
+            logging.info(f"[VehicleBoost] Boosted {boosted_count} results matching vehicle: {canonical_vehicle}")
+
+        return merged_results
 
     # ------------------------------------------------------------------
     # Format context output (enhanced với relationships)
@@ -726,7 +1047,9 @@ class GraphRetrievalTool(BaseTool):
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         """
-        Async entry point — chạy 3 nhánh search SONG SONG.
+        Async entry point — chạy 4 nhánh search SONG SONG.
+
+        Chiến lược mới: Keyword + Vector + Graph + ConsequenceFirst (nhánh 4)
 
         Parameters
         ----------
@@ -753,11 +1076,11 @@ class GraphRetrievalTool(BaseTool):
             loop = asyncio.get_running_loop()
             vector = await loop.run_in_executor(None, self._embed, query)
 
-            # ── Bước 2: Chạy SONG SONG 3 nhánh với Timeout Guard ────────────
+            # ── Bước 2: Chạy SONG SONG 4 nhánh với Timeout Guard ────────────
             logging.info(
                 f"[GraphRetrievalTool] 🚀 Bắt đầu parallel search với timeouts: "
                 f"keyword={self.keyword_timeout}s, vector={self.vector_timeout}s, "
-                f"graph={self.graph_timeout}s | "
+                f"graph={self.graph_timeout}s, consequence={self.consequence_timeout}s | "
                 f"query='{query[:50]}' | "
                 f"violation='{entities.get('violation', '')[:50]}' | "
                 f"vehicle='{entities.get('vehicle_type', '')}'"
@@ -777,7 +1100,7 @@ class GraphRetrievalTool(BaseTool):
                     logging.error(f"[{branch_name}] Exception: {e}")
                     return []
 
-            # Tạo tasks với timeout guards
+            # Tạo tasks với timeout guards (4 nhánh)
             keyword_task = search_with_timeout(
                 self._search_keyword(query),
                 self.keyword_timeout,
@@ -793,22 +1116,37 @@ class GraphRetrievalTool(BaseTool):
                 self.graph_timeout,
                 "Graph"
             )
+            consequence_task = search_with_timeout(
+                self._search_consequence_first(query, entities),
+                self.consequence_timeout,
+                "ConsequenceFirst"
+            )
 
-            keyword_results, vector_results, graph_results = await asyncio.gather(
+            keyword_results, vector_results, graph_results, consequence_results = await asyncio.gather(
                 keyword_task,
                 vector_task,
                 graph_task,
+                consequence_task,  # 4th branch
             )
 
             logging.info(
                 f"[GraphRetrievalTool] ✅ Parallel search hoàn tất: "
                 f"keyword={len(keyword_results)} | "
                 f"vector={len(vector_results)} | "
-                f"graph={len(graph_results)}"
+                f"graph={len(graph_results)} | "
+                f"consequence={len(consequence_results)}"
             )
 
-            # ── Bước 3: Merge + Deduplicate + Rank ───────────────────────
-            merged = self._merge_results(keyword_results, vector_results, graph_results)
+            # ── Bước 3: Merge + Deduplicate + Rank với RRF ───────────────────────
+            merged = self._merge_results(
+                keyword_results,
+                vector_results,
+                graph_results,
+                consequence_results,  # Pass 4th branch
+            )
+
+            # ── Bước 3.5: Apply Vehicle-Aware Boosting (Post-RRF) ────────────────
+            merged = self._apply_vehicle_boost(merged, entities)
 
             if not merged:
                 not_found_msg = (
@@ -818,7 +1156,7 @@ class GraphRetrievalTool(BaseTool):
                 self._write_query_log(query, entities, "(KHÔNG TÌM THẤY KẾT QUẢ)")
                 return not_found_msg
 
-            # ── Bước 3.5: THRESHOLDING — kiểm tra chất lượng kết quả ─────
+            # ── Bước 3.6: THRESHOLDING — kiểm tra chất lượng kết quả ─────
             # Nếu điểm cao nhất vẫn dưới ngưỡng → Graph "đầu hàng" và signal cho Web Search
             max_score = merged[0].get("_rrf_score", 0) if merged else 0
 
@@ -863,7 +1201,10 @@ def make_graph_retrieval_tool(
     keyword_timeout: float = 3.0,
     vector_timeout: float = 5.0,
     graph_timeout: float = 5.0,
+    consequence_timeout: float = 3.0,      # NEW
     rrf_threshold: float = 0.016,
+    vehicle_boost_enabled: bool = True,    # NEW
+    vehicle_boost_multiplier: float = 1.3, # NEW
 ) -> GraphRetrievalTool:
     """
     Tạo và trả về instance của GraphRetrievalTool.
@@ -884,11 +1225,17 @@ def make_graph_retrieval_tool(
         Timeout (giây) cho Vector semantic search (mặc định: 5.0s).
     graph_timeout : float
         Timeout (giây) cho Graph traversal (mặc định: 5.0s).
+    consequence_timeout : float
+        Timeout (giây) cho Consequence-first branch (mặc định: 3.0s).
     rrf_threshold : float
         RRF score threshold tối thiểu để chấp nhận kết quả (mặc định: 0.016).
         - 0.025: Strict (≥2 sources, top ranks)
         - 0.016: Balanced (≥1 source, top-1) — Recommended
         - 0.010: Lenient (accept most results)
+    vehicle_boost_enabled : bool
+        Enable vehicle-type aware score boosting (mặc định: True).
+    vehicle_boost_multiplier : float
+        Score multiplier cho kết quả khớp loại xe (mặc định: 1.3).
 
     Returns
     -------
@@ -903,7 +1250,10 @@ def make_graph_retrieval_tool(
     ...     keyword_timeout=3.0,
     ...     vector_timeout=5.0,
     ...     graph_timeout=5.0,
-    ...     rrf_threshold=0.016  # Balanced
+    ...     consequence_timeout=3.0,
+    ...     rrf_threshold=0.016,
+    ...     vehicle_boost_enabled=True,
+    ...     vehicle_boost_multiplier=1.3
     ... )
     >>> agent = create_react_agent(llm, tools=[tool], checkpointer=checkpointer)
     """
@@ -915,5 +1265,8 @@ def make_graph_retrieval_tool(
         keyword_timeout=keyword_timeout,
         vector_timeout=vector_timeout,
         graph_timeout=graph_timeout,
+        consequence_timeout=consequence_timeout,
         rrf_threshold=rrf_threshold,
+        vehicle_boost_enabled=vehicle_boost_enabled,
+        vehicle_boost_multiplier=vehicle_boost_multiplier,
     )

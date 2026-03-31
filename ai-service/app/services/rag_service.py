@@ -102,9 +102,19 @@ class RAGService:
         self._embed_model_id = settings.EMBED_MODEL_ID
 
         self._driver = None
-        self._llm = None
         self._llm_router = None
-        self._llm_reflector = None  # LLM riêng cho reflection (không dùng thinking budget)
+
+        # Generator LLMs theo complexity level
+        self._llm_gen_l1 = None  # Level 1 (Simple):  thinking_budget=0
+        self._llm_gen_l2 = None  # Level 2 (Medium):  thinking_budget=2048
+        self._llm_gen_l3 = None  # Level 3 (Complex): thinking_budget=4096
+
+        # Reflector LLMs theo complexity level (Reflector = Generator / 4)
+        self._llm_ref_l2 = None  # Level 2: thinking_budget=512
+        self._llm_ref_l3 = None  # Level 3: thinking_budget=1024
+
+        # Alias cho Generator mặc định (Level 2) — dùng ở các chỗ gọi _llm trực tiếp
+        self._llm = None  # trỏ tới _llm_gen_l2 sau khi khởi tạo
         self._embed_model = None
 
         self._checkpointer: Optional[AsyncPostgresSaver] = checkpointer
@@ -171,31 +181,67 @@ class RAGService:
             logging.error("❌ Thiếu GOOGLE_API_KEY")
             return
         try:
-            self._llm = ChatGoogleGenerativeAI(
+            self._llm_router = ChatGoogleGenerativeAI(
+                model="gemini-3.1-flash-lite-preview",
+                google_api_key=self._api_key,
+                temperature=0,
+            )
+
+            # ── Generator LLMs (Complexity Level 1/2/3) ────────────────────────
+            # Level 1 — Simple: tắt thinking hoàn toàn (thinking_budget=0)
+            self._llm_gen_l1 = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                google_api_key=self._api_key,
+                temperature=0,
+                include_thoughts=False,
+                thinking_budget=0,
+                streaming=True,
+            )
+            # Level 2 — Medium: thinking vừa phải
+            self._llm_gen_l2 = ChatGoogleGenerativeAI(
                 model="gemini-3-flash-preview",
                 google_api_key=self._api_key,
                 temperature=0,
                 include_thoughts=True,
-                thinking_budget=4096,  
-                stream_usage=True,
-                streaming=True,  # Enable streaming for LangGraph astream_events
+                thinking_budget=2048,
+                streaming=True,
             )
-
-            self._llm_router = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-lite-preview",
+            # Level 3 — Complex: full thinking
+            self._llm_gen_l3 = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
                 google_api_key=self._api_key,
-                temperature=0,       
+                temperature=0,
+                include_thoughts=True,
+                thinking_budget=4096,
+                streaming=True,
             )
 
-            # LLM riêng cho reflector
-            self._llm_reflector = ChatGoogleGenerativeAI(
+            # ── Reflector LLMs (budget = Generator / 4) ────────────────────────
+            # Level 1: Reflector bị tắt hoàn toàn — không cần instance
+            # Level 2: 2048 / 4 = 512
+            self._llm_ref_l2 = ChatGoogleGenerativeAI(
+                model="gemini-3-flash-preview",
+                google_api_key=self._api_key,
+                temperature=0,
+                include_thoughts=True,
+                thinking_budget=512,
+            )
+            # Level 3: 4096 / 4 = 1024
+            self._llm_ref_l3 = ChatGoogleGenerativeAI(
                 model="gemini-3-flash-preview",
                 google_api_key=self._api_key,
                 temperature=0,
                 include_thoughts=True,
                 thinking_budget=1024,
             )
-            logging.info("✅ Kết nối Gemini API thành công! (ChatGoogleGenerativeAI)")
+
+            # Alias _llm → _llm_gen_l2 (backward-compat cho agent_direct)
+            self._llm = self._llm_gen_l2
+
+            logging.info(
+                "✅ Kết nối Gemini API thành công! "
+                "(Generator L1/L2/L3 + Reflector L2/L3)"
+            )
         except Exception as e:
             logging.error(f"❌ Lỗi cấu hình Gemini API: {e}")
 
@@ -215,18 +261,27 @@ class RAGService:
     # Step 1 — Router + Extractor
     # ------------------------------------------------------------------
 
-    async def _node_router_rewrite(self, state: RAGState) -> dict:
+    async def _node_router_rewrite(self, state: RAGState, config: dict = None) -> dict:
         """
         Step 1: Phân loại câu hỏi (route) + chuẩn hóa thuật ngữ (legal_query)
         + bóc tách entities + phân tách đa vi phạm (sub_queries) — tất cả trong 1 lần gọi LLM.
+
+        NOTE: LangGraph truyền `config` vào các *node* (không phải routing function).
+        Nên ta đọc enable_web_search tại đây và lưu vào state để routing function đọc sau.
         """
+        # Đọc enable_web_search từ config (LangGraph truyền vào node, không phải routing fn)
+        enable_web_search = True
+        if config and "configurable" in config:
+            enable_web_search = config["configurable"].get("enable_web_search", True)
+        logging.info(f"[STEP1] enable_web_search={enable_web_search}")
+
         messages = list(state.get("messages", []))
 
         chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
         recent_msgs = chat_msgs[-5:]  # Lấy 5 tin nhắn gần đây nhất (cả Hỏi và Đáp) làm ngữ cảnh
 
         if not recent_msgs:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": []}
+            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search}
 
         # Lấy câu hỏi cuối cùng của user
         last_question = ""
@@ -236,7 +291,7 @@ class RAGService:
                 break
 
         if not last_question:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": []}
+            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search}
 
         # Định dạng ngữ cảnh từ lịch sử gần nhất để Router hiểu ý câu hỏi nối tiếp
         history_text = "\n".join([f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent_msgs])
@@ -268,9 +323,24 @@ class RAGService:
                         "label": sq.get("label", sq["legal_query"][:30]),
                     })
 
+            # ── Parse + validate complexity_level ──────────────────────────
+            raw_level = data.get("complexity_level", 2)
+            try:
+                complexity_level = max(1, min(3, int(raw_level)))
+            except (TypeError, ValueError):
+                complexity_level = 2
+
+            # Auto-upgrade: nhiều sub_queries → luôn là level 3
+            if len(validated_subs) >= 2 and complexity_level < 3:
+                complexity_level = 3
+            # Auto-upgrade: 1 sub_query → tối thiểu level 2
+            elif len(validated_subs) == 1 and complexity_level < 2:
+                complexity_level = 2
+
             logging.info(
                 f"[STEP1] route={route!r}, style={response_style!r}, "
-                f"legal_query={legal_query!r}, sub_queries={len(validated_subs)}"
+                f"legal_query={legal_query!r}, sub_queries={len(validated_subs)}, "
+                f"complexity_level={complexity_level}"
             )
             return {
                 "route": route,
@@ -278,14 +348,17 @@ class RAGService:
                 "entities": entities,
                 "response_style": response_style,
                 "sub_queries": validated_subs,
+                "complexity_level": complexity_level,
+                "enable_web_search": enable_web_search,  # lưu vào state để routing fn đọc
             }
         except Exception as e:
             logging.error(f"[STEP1] Lỗi: {e} — fallback use_tool")
-            return {"route": "use_tool", "legal_query": question, "entities": {}, "response_style": "legal", "sub_queries": []}
+            return {"route": "use_tool", "legal_query": question, "entities": {}, "response_style": "legal", "sub_queries": [], "complexity_level": 2, "enable_web_search": enable_web_search}
 
     # ------------------------------------------------------------------
     # Step 2 — Retriever (parallel multi-violation via asyncio.gather)
     # ------------------------------------------------------------------
+
 
     @classmethod
     def _filter_context_for_reflector(cls, context: str) -> str:
@@ -526,7 +599,29 @@ class RAGService:
         Bổ sung: trigger_search flag
           true  → Graph data không khớp hoặc độ tin cậy thấp → force web search
           false → context đáng tin cậy
+
+        Complexity-aware:
+          Level 1 (Simple) → skip hoàn toàn, trả "sufficient"
+          Level 2 (Medium) → gọi _llm_ref_l2 (thinking_budget=512)
+          Level 3 (Complex)→ gọi _llm_ref_l3 (thinking_budget=1024)
         """
+        complexity_level = state.get("complexity_level", 2)
+
+        # ── Level 1: Skip Reflector hoàn toàn ──────────────────────────────
+        if complexity_level == 1:
+            logging.info(
+                "[STEP3] SKIP Reflector (complexity_level=1 — Simple query). "
+                "Trả thẳng 'sufficient' để tiết kiệm latency."
+            )
+            return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
+
+        # ── Level 2/3: Chọn LLM theo level ─────────────────────────────────
+        _llm_map = {
+            2: self._llm_ref_l2,  # thinking_budget=512
+            3: self._llm_ref_l3,  # thinking_budget=1024
+        }
+        llm_reflector = _llm_map.get(complexity_level, self._llm_ref_l2)
+
         messages = state.get("messages", [])
         question = ""
         for msg in reversed(messages):
@@ -542,7 +637,7 @@ class RAGService:
         # Chi phí của Gemini 3 Flash rất rẻ, nên gọi LLM Reflector 100% để đảm bảo chất lượng)
         if context and self._is_high_confidence_context(context, entities):
             logging.info(
-                "[STEP3] Pre-check condition met, nhưng đã vô hiệu hóa bypass. "
+                f"[STEP3] Pre-check condition met (level={complexity_level}), nhưng đã vô hiệu hóa bypass. "
                 "Vẫn gọi LLM Reflector để bắt các ca 'vùng xám' (Semantic Mismatch)."
             )
             # return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
@@ -553,7 +648,7 @@ class RAGService:
             entities=json.dumps(entities, ensure_ascii=False, indent=2),
         )
         try:
-            response = await self._llm_reflector.ainvoke([HumanMessage(content=prompt)])
+            response = await llm_reflector.ainvoke([HumanMessage(content=prompt)])
             raw = _extract_ai_text(response).strip()
             raw = re.sub(r'^```(?:json)?\s*', '', raw)
             raw = re.sub(r'\s*```$', '', raw.strip())
@@ -562,7 +657,10 @@ class RAGService:
             clarification_q = data.get("clarification_question", "")
             trigger_search = data.get("trigger_search", False)
 
-            logging.info(f"[STEP3] verdict={verdict!r}, trigger_search={trigger_search}")
+            logging.info(
+                f"[STEP3] level={complexity_level}, verdict={verdict!r}, "
+                f"trigger_search={trigger_search}"
+            )
             return {
                 "reflection": verdict,
                 "clarification_question": clarification_q,
@@ -624,7 +722,24 @@ class RAGService:
         response_style từ Router quyết định giọng văn:
           - "legal"   → format Terminal cứng, trích dẫn pháp lý nghiêm túc
           - "natural"  → trả lời như một người bạn thân thiện
+
+        Complexity-aware (thinking_budget):
+          - Level 1 (Simple):  thinking_budget=0  (tắt thinking)
+          - Level 2 (Medium):  thinking_budget=2048
+          - Level 3 (Complex): thinking_budget=4096
         """
+        complexity_level = state.get("complexity_level", 2)
+        _llm_gen_map = {
+            1: self._llm_gen_l1,  # thinking_budget=0
+            2: self._llm_gen_l2,  # thinking_budget=2048
+            3: self._llm_gen_l3,  # thinking_budget=4096
+        }
+        llm = _llm_gen_map.get(complexity_level, self._llm_gen_l2)
+        logging.info(
+            f"[STEP4] LLM selected: gen_l{complexity_level}, "
+            f"thinking_budget={({1: 0, 2: 2048, 3: 4096}).get(complexity_level, 2048)}"
+        )
+
         messages = list(state.get("messages", []))
         context = state.get("context", "")
         style = state.get("response_style", "legal")
@@ -676,7 +791,7 @@ class RAGService:
                 ]
 
         try:
-            response = await self._llm.ainvoke(messages_to_llm)
+            response = await llm.ainvoke(messages_to_llm)
             return {"messages": [response]}
         except Exception as e:
             logging.error(f"[STEP4] Lỗi: {e}")
@@ -804,12 +919,23 @@ class RAGService:
           needs_clarification     → clarifier (hỏi ngược user, rồi END)
           not_found               → web_search_fallback → generator
 
-        Logic mới (2 điều kiện force search):
-          1. Threshold: Graph tự động phát hiện score thấp → trigger_search = true
-          2. Reflector: LLM phát hiện data không khớp → trigger_search = true
+        NOTE: LangGraph KHÔNG truyền `config` vào routing function của add_conditional_edges.
+        enable_web_search được lưu vào state bởi _node_router_rewrite rồi đọc tại đây.
         """
+        # Đọc từ state (không đọc từ config — routing fn không nhận được config)
+        enable_web_search = state.get("enable_web_search", True)
+
         verdict = state.get("reflection", "sufficient")
         trigger_search = state.get("trigger_search", False)
+
+        # ── Ưu tiên 0: Tắt thủ công qua Config (cho Testing RAGAS) ───────────
+        if not enable_web_search:
+            if trigger_search or verdict == "not_found":
+                logging.info("[ROUTING] enable_web_search=False → Bỏ qua web_search_fallback, tiếp tục tới generator")
+                return "generator"
+            if verdict == "needs_clarification":
+                return "clarifier"
+            return "generator"
 
         # ── Ưu tiên 1: Force search (threshold hoặc reflector detection) ─────
         if trigger_search:
@@ -1065,7 +1191,14 @@ class RAGService:
         }
 
         thread_id = conversation_id or "default"
-        graph_config = {"configurable": {"thread_id": thread_id}}
+        graph_config = {
+            "configurable": {"thread_id": thread_id},
+            "run_name": f"RAG Pipeline — {question[:50]}",
+            "metadata": {
+                "conversation_id": conversation_id or "default",
+                "thread_id": thread_id,
+            },
+        }
         collected_sources: list[dict] = []
 
         # Cache tracking
@@ -1457,6 +1590,16 @@ class RAGService:
                 embed_model=self._embed_model,
                 top_k=5,
                 score_threshold=0.010,  # Ngưỡng thấp nhất để chấp nhận kết quả (thấp hơn → force web search)
+                # Timeouts for parallel branches
+                keyword_timeout=3.0,
+                vector_timeout=5.0,
+                graph_timeout=5.0,
+                consequence_timeout=3.0,  # New: consequence-first branch
+                # RRF threshold
+                rrf_threshold=0.016,  # Balanced mode
+                # Vehicle-aware boosting
+                vehicle_boost_enabled=True,
+                vehicle_boost_multiplier=1.3,
             )
         ]
 

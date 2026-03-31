@@ -2,7 +2,7 @@ description: "Router + Rewrite: phân loại câu hỏi và chuẩn hóa thuật
 
 template: |
   Bạn là router cho chatbot tư vấn Luật Giao thông (Nghị định 168/2024/NĐ-CP).
-  Phân tích câu hỏi và trả về JSON với 4 nhiệm vụ:
+  Phân tích câu hỏi và trả về JSON với 5 nhiệm vụ:
 
   ══════════════════════════════════════════════════════════════
   QUY TẮC TIỀN XỬ LÝ
@@ -75,6 +75,36 @@ template: |
     ]
 
   ══════════════════════════════════════════════════════════════
+  5. PHÂN LOẠI ĐỘ PHỨC TẠP (complexity_level)
+  ══════════════════════════════════════════════════════════════
+  Chỉ áp dụng khi route = "use_tool". Với các route khác → complexity_level = 1.
+
+  • Level 1 — Simple:
+    - 1 chủ thể, 1 hành vi duy nhất, rõ ràng, không cần suy luận nhiều
+    - sub_queries = [] (không có đa vi phạm)
+    - KHÔNG có từ khóa xung đột/tranh chấp/tai nạn
+    - Ví dụ: "Phạt nồng độ cồn mức 1 xe máy?", "Vượt đèn đỏ bị phạt bao nhiêu?"
+
+  • Level 2 — Medium:
+    - Nhiều chủ thể hoặc loại xe khác nhau cần phân biệt
+    - Có từ khóa trùng lặp dễ nhầm (vd: người đi bộ vs ô tô)
+    - sub_queries có đúng 1 phần tử (1 vi phạm thứ cấp)
+    - Câu hỏi so sánh hoặc liên quan đến điều kiện phụ
+    - Ví dụ: "Người đi bộ băng đường sai vs ô tô không nhường đường?", "Nồng độ cồn mức 2 trên cao tốc khác gì thường?"
+
+  • Level 3 — Complex:
+    - Tình huống tai nạn giao thông, tranh chấp bồi thường
+    - Nhiều lỗi kết hợp (sub_queries ≥ 2)
+    - Cần phân tích trách nhiệm pháp lý nhiều bên
+    - Phạt hành chính kết hợp trách nhiệm dân sự/hình sự
+    - Ví dụ: "Xe máy không mũ, nồng độ cồn mức 2, vào đường cấm", "Va chạm xe máy với ô tô, cả 2 đều lỗi, bồi thường thế nào?"
+
+  QUY TẮC NHANH:
+    - sub_queries.length == 0 + 1 hành vi rõ  → level 1
+    - sub_queries.length == 1 HOẶC nhiều chủ thể → level 2
+    - sub_queries.length >= 2 HOẶC có "tai nạn"/"tranh chấp"/"bồi thường" → level 3
+
+  ══════════════════════════════════════════════════════════════
   OUTPUT (JSON thuần, KHÔNG markdown)
   ══════════════════════════════════════════════════════════════
   {{
@@ -86,11 +116,13 @@ template: |
       "subject": "...",
       "conditions": [...]
     }},
-    "sub_queries": [...]
+    "sub_queries": [...],
+    "complexity_level": 1 | 2 | 3
   }}
 
   ⚠️ sub_queries = [] khi chỉ 1 vi phạm hoặc route != "use_tool"
   ⚠️ Không chắc route → chọn "use_tool"
+  ⚠️ Không chắc complexity_level → chọn 2
 
   ══════════════════════════════════════════════════════════════
   Câu hỏi: {question}

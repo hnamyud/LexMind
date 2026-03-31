@@ -27,5 +27,11 @@ class Settings:
     FASTAPI_URI: str = os.getenv("FASTAPI_URI")
     FASTAPI_PORT: str = os.getenv("FASTAPI_PORT")
 
+    # LangSmith Tracing
+    LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "false")
+    LANGCHAIN_API_KEY: str = os.getenv("LANGCHAIN_API_KEY", "")
+    LANGCHAIN_PROJECT: str = os.getenv("LANGCHAIN_PROJECT", "chatbot-law")
+    LANGCHAIN_ENDPOINT: str = os.getenv("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
+
 
 settings = Settings()

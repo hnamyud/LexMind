@@ -175,6 +175,161 @@ async def get_law_detail(node_id: str, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Graph Demo endpoint
+# ---------------------------------------------------------------------------
+
+@router.get("/graph/demo", tags=["Graph"])
+async def graph_demo(request: Request, id: str = "d6_k6"):
+    """
+    Trả về đồ thị con cho node gốc truyền vào qua query param `id`.
+
+    Cypher sử dụng:
+      MATCH path = (d:Entity {id: $node_id})-[*1..2]-(n)
+      RETURN path
+    """
+    svc = _get_service(request)
+    if not svc._driver:
+        raise HTTPException(status_code=503, detail="Cơ sở dữ liệu đồ thị chưa được kết nối.")
+
+    query = """
+    MATCH path = (d:Entity {id: $node_id})-[*1..2]-(n)
+    RETURN path
+    """
+
+    type_alias_map = {
+        "Article": "DieuKhoan",
+        "Action": "HanhVi",
+        "Vehicle": "PhuongTien",
+        "Consequence": "MucPhat",
+        "Penalty": "MucPhat",
+        "AdditionalPenalty": "HinhPhatBoSung",
+        "LegalDocument": "VanBanPhapLy",
+        "Chapter": "Chuong",
+        "Entity": "Entity",
+    }
+
+    def _clean_text(value: str) -> str:
+        return " ".join(str(value).split())
+
+    def _pick_node_label(props: dict, fallback_id: str) -> str:
+        candidates = [
+            props.get("text"),
+            props.get("raw_text"),
+            fallback_id,
+        ]
+        for candidate in candidates:
+            if candidate:
+                cleaned = _clean_text(candidate)
+                if cleaned:
+                    return cleaned[:120]
+        return fallback_id
+
+    try:
+        async with svc._driver.session(
+            database="neo4j",
+            default_access_mode=neo4j.READ_ACCESS,
+        ) as session:
+            result = await session.run(query, node_id=id)
+            # Keep raw Record objects so `path` stays a neo4j.graph.Path instance.
+            records = [record async for record in result]
+
+        if not records:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy path cho id: {id}")
+
+        nodes_by_id: dict[str, dict] = {}
+        edges_by_key: dict[tuple[str, str, str], dict] = {}
+
+        for record in records:
+            path = record.get("path")
+            if not path:
+                continue
+
+            path_nodes = list(path.nodes)
+            path_rels = list(path.relationships)
+
+            for node in path_nodes:
+                node_id = node.get("id")
+                if not node_id:
+                    continue
+
+                props = dict(node)
+                props.pop("embedding", None)
+
+                labels = list(node.labels) if getattr(node, "labels", None) else []
+                raw_type = props.get("label") or (labels[0] if labels else "Entity")
+                node_type = type_alias_map.get(raw_type, raw_type)
+                
+                if node_id not in nodes_by_id:
+                    nodes_by_id[node_id] = {
+                        "id": node_id,
+                        "label": _pick_node_label(props, node_id),
+                        "type": node_type,
+                        "description": (
+                            _clean_text(
+                                props.get("mo_ta")
+                                or props.get("description")
+                                or props.get("raw_text")
+                                or ""
+                            )
+                        )[:280]
+                    }
+
+            # Relationship objects do not always expose full node objects consistently
+            # across driver serialization modes, so map edges by path traversal order.
+            for i, rel in enumerate(path_rels):
+                source_node = path_nodes[i] if i < len(path_nodes) else None
+                target_node = path_nodes[i + 1] if i + 1 < len(path_nodes) else None
+
+                source = source_node.get("id") if source_node else None
+                target = target_node.get("id") if target_node else None
+                if not source or not target:
+                    continue
+
+                relation = rel.type
+                edge_key = (source, target, relation)
+                if edge_key not in edges_by_key:
+                    edges_by_key[edge_key] = {
+                        "source": source,
+                        "target": target,
+                        "relation": relation,
+                    }
+
+        nodes = list(nodes_by_id.values())
+        edges = list(edges_by_key.values())
+
+        if not nodes:
+            raise HTTPException(status_code=404, detail=f"Không tìm thấy node/path cho id: {id}")
+
+        # Giữ bảng màu cho frontend, mở rộng thêm fallback Entity.
+        type_meta = {
+            "HanhVi": {"color": "#ef4444", "icon": "⚠️"},
+            "PhuongTien": {"color": "#3b82f6", "icon": "🚗"},
+            "MucPhat": {"color": "#f97316", "icon": "💰"},
+            "HinhPhatBoSung": {"color": "#a855f7", "icon": "📋"},
+            "VanBanPhapLy": {"color": "#10b981", "icon": "📜"},
+            "Chuong": {"color": "#facc15", "icon": "📖"},
+            "DieuKhoan": {"color": "#06b6d4", "icon": "§"},
+            "Entity": {"color": "#64748b", "icon": "●"},
+        }
+
+        return {
+            "status": "success",
+            "seed_id": id,
+            "query": "MATCH path = (d:Entity {id: $node_id})-[*1..2]-(n) RETURN path",
+            "total_nodes": len(nodes),
+            "total_edges": len(edges),
+            "type_meta": type_meta,
+            "nodes": nodes,
+            "edges": edges,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Lỗi /graph/demo với id={id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi truy vấn đồ thị demo: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
 # Conversation Title Generation
 # ---------------------------------------------------------------------------
 
@@ -263,3 +418,4 @@ async def clear_conversation_checkpoint(conversation_id: str, request: Request):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Lỗi khi xóa checkpoint: {str(e)}")
+

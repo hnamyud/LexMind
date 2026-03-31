@@ -1,12 +1,18 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Query } from '@nestjs/common';
 import { AppService } from './app.service';
+import { Throttle } from '@nestjs/throttler';
+import { ApiBearerAuth } from '@nestjs/swagger';
+import { Public, ResponseMessage } from './core/decorators/customize.decorator';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(private readonly appService: AppService) { }
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
+  @Get('/graph/demo')
+  @Public()
+  @Throttle({ default: { ttl: 60000, limit: 30 } })
+  @ResponseMessage('Get Graph Demo Data')
+  async getGraphDemo(@Query('id') id?: string) {
+    return this.appService.getGraphDemo(id);
   }
 }

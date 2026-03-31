@@ -2,6 +2,7 @@
 
 Đây là file tổng hợp tra cứu toàn bộ Endpoints của Backend NestJS:
 
+- [App / General API](./app.md): Các API dùng chung mức hệ thống (vd: Graph Demo).
 - [Authentication API](./auth.md): Quản lý đăng nhập, JWT, OAuth Google, OTP.
 - [Chat API](./chat.md): Quản lý luồng giao tiếp Streaming với LLM (FastAPI), tái tạo câu trả lời, lấy chi tiết luật trong Knowledge Graph.
 - [Conversations API](./conversations.md): Quản lý lịch sử phòng trò chuyện.

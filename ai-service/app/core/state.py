@@ -14,6 +14,8 @@ class RAGState(TypedDict):
     legal_query: str       # thuật ngữ pháp lý đã chuẩn hóa
     entities: dict         # {violation, vehicle_type, subject, conditions[]}
     response_style: str    # "legal" (format cứng, trích dẫn luật) | "natural" (thân thiện)
+    complexity_level: int  # 1=Simple | 2=Medium | 3=Complex — điều chỉnh thinking budget
+    enable_web_search: bool  # False khi chạy RAGAS experiment — đọc từ config trong router node
 
     # ── Step 1b: Sub-query decomposition (multi-violation) ───────────────────
     sub_queries: List[dict]    # [{"legal_query": "...", "entities": {...}, "label": "..."}, ...]

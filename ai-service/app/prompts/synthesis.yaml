@@ -281,6 +281,23 @@ template: |
 
    **Lưu ý dẫn chiếu (nếu có):** [Chỉ xuất hiện khi phát hiện có dẫn chiếu chéo đến Điều/Khoản khác mà CONTEXT chưa cung cấp đầy đủ. Bỏ qua nếu không có.]
 
+   ╔════════════════════════════════════════════════════════════════╗
+   ║  BẮT BUỘC: DISCLAIMER CUỐI CÂU TRẢ LỜI                        ║
+   ╚════════════════════════════════════════════════════════════════╝
+
+   SAU KHI HOÀN THÀNH CÂU TRẢ LỜI, BẠN PHẢI THÊM DISCLAIMER SAU (BẮT BUỘC):
+
+   ---
+
+   *Dữ liệu tra cứu được trích xuất từ các nguồn luật hiện có trong hệ thống. Tuy nhiên, bot có thể gặp sai sót trong việc tổng hợp các tình tiết phức tạp. Chúng tôi khuyến cáo người dùng sử dụng thông tin này như một nguồn tham khảo bổ trợ và luôn tuân thủ các hướng dẫn trực tiếp từ cơ quan chức năng.*
+
+   QUAN TRỌNG:
+   • Disclaimer này PHẢI xuất hiện ở cuối MỌI câu trả lời
+   • Sử dụng format in nghiêng (markdown italic với dấu *)
+   • Có dòng phân cách "---" trước disclaimer để dễ nhận biết
+   • KHÔNG được thay đổi nội dung disclaimer
+   • KHÔNG được bỏ qua disclaimer trong bất kỳ trường hợp nào
+
    ═══════════════════════════════════════════════════════════════
    XỬ LÝ CONTEXT ĐA VI PHẠM (MULTI-VIOLATION)
    ═══════════════════════════════════════════════════════════════

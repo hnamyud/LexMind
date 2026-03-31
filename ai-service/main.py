@@ -11,6 +11,17 @@ from app.services.rag_service import RAGService
 from app.core.config import settings
 
 # ---------------------------------------------------------------------------
+# LangSmith Tracing Configuration
+# Set env vars explicitly so LangChain/LangGraph auto-detect tracing
+# ---------------------------------------------------------------------------
+import os
+if settings.LANGCHAIN_API_KEY:
+    os.environ["LANGCHAIN_TRACING_V2"] = settings.LANGCHAIN_TRACING_V2
+    os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
+    os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
+    os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGCHAIN_ENDPOINT
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
