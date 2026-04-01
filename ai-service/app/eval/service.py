@@ -95,6 +95,40 @@ class EvalService:
         self._pool = pool
         self._rag = rag_service
 
+    @staticmethod
+    def _resolve_langsmith_url(run_result: dict) -> str:
+        """Resolve LangSmith URL from prebuilt field or raw results object."""
+        if not isinstance(run_result, dict):
+            return ""
+
+        url = run_result.get("langsmith_url", "")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+
+        raw_results = run_result.get("results")
+        if raw_results is not None:
+            for attr in ("url", "experiment_url", "session_url", "project_url", "results_url"):
+                value = getattr(raw_results, attr, None)
+                if isinstance(value, str) and value.strip().startswith("http"):
+                    return value.strip()
+
+        return ""
+
+    @staticmethod
+    def _normalize_behavior_score(value, db_type: str):
+        """Normalize behavior score theo kiểu cột hiện có trong DB."""
+        if value is None:
+            return None
+
+        normalized_type = (db_type or "").lower()
+        if normalized_type in {"smallint", "integer", "bigint"}:
+            try:
+                return 2 if bool(value) else 0
+            except Exception:
+                return None
+
+        return bool(value)
+
     # ──────────────────────────────────────────────────────────────────
     # 1. Batch Run
     # ──────────────────────────────────────────────────────────────────
@@ -277,21 +311,20 @@ class EvalService:
             await self._persist_run_records(session_id, run_records)
 
         try:
+            langsmith_url = self._resolve_langsmith_url(run_result)
             async with self._pool.connection() as conn:
                 await conn.execute(
                     """
                     UPDATE eval_sessions
                     SET status = %s,
                         completed = CASE WHEN %s = 'done' THEN total ELSE completed END,
-                        experiment_id = COALESCE(NULLIF(%s, ''), experiment_id),
                         langsmith_url = COALESCE(NULLIF(%s, ''), langsmith_url)
                     WHERE id = %s
                     """,
                     (
                         final_status,
                         final_status,
-                        run_result.get("experiment_id", "") if isinstance(run_result, dict) else "",
-                        run_result.get("langsmith_url", "") if isinstance(run_result, dict) else "",
+                        langsmith_url,
                         session_id,
                     ),
                 )
@@ -318,8 +351,27 @@ class EvalService:
 
         try:
             async with self._pool.connection() as conn:
+                behavior_score_type = "boolean"
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        """
+                        SELECT data_type
+                        FROM information_schema.columns
+                        WHERE table_name = 'eval_runs'
+                          AND column_name = 'score_behavior'
+                        LIMIT 1
+                        """
+                    )
+                    row = await cur.fetchone()
+                    if row and row[0]:
+                        behavior_score_type = row[0]
+
                 for rec in records:
                     run_id = str(uuid.uuid4())
+                    score_behavior_value = self._normalize_behavior_score(
+                        rec.get("score_behavior"),
+                        behavior_score_type,
+                    )
                     await conn.execute(
                         """
                         INSERT INTO eval_runs (
@@ -355,7 +407,7 @@ class EvalService:
                             rec.get("expected_behavior", ""),
                             rec.get("score_correctness"),    # BOOLEAN
                             rec.get("score_groundedness"),   # BOOLEAN
-                            rec.get("score_behavior"),       # BOOLEAN
+                            score_behavior_value,
                             rec.get("score_citation"),       # BOOLEAN
                             rec.get("retrieval_hit_rate"),   # FLOAT
                         ),

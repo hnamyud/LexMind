@@ -10,6 +10,19 @@ grader_llm = ChatGoogleGenerativeAI(
     google_api_key=os.getenv("GOOGLE_API_KEY"),
 )
 
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+def _get_expected_behavior(inputs: dict, reference_outputs: dict) -> str:
+    """Lấy expected_behavior từ inputs hoặc reference_outputs, mặc định 'answer'."""
+    return (
+        (inputs or {}).get("expected_behavior")
+        or (reference_outputs or {}).get("expected_behavior")
+        or "answer"
+    )
+
+SKIP_SENTINEL = None  # Trả về None để báo hiệu evaluator này bị skip
+
+
 # ── Evaluator 1: Correctness ──────────────────────────────────────────────
 class CorrectnessGrade(TypedDict):
     explanation: Annotated[str, ..., "Giải thích từng bước lý do chấm điểm"]
@@ -26,7 +39,22 @@ Tiêu chí chấm (theo thứ tự ưu tiên):
 
 Correct = True chỉ khi đáp ứng đủ tiêu chí (1) và (2). (3) là optional."""
 
-def correctness(inputs: dict, outputs: dict, reference_outputs: dict) -> bool:
+def correctness(inputs: dict, outputs: dict, reference_outputs: dict) -> bool | None:
+    """
+    Chấm tính đúng đắn pháp lý của câu trả lời.
+
+    Skip rules:
+    - refuse: Không có con số/điều khoản để check đúng/sai → skip (None).
+    - clarify: Bot chưa được phép đưa ra con số → skip (None).
+              Nếu Bot đưa ra con số dù thiếu thông tin → đánh lỗi ở behavior_compliance.
+    - answer:  Chấm bình thường.
+    """
+    expected_behavior = _get_expected_behavior(inputs, reference_outputs)
+
+    # Skip với refuse và clarify
+    if expected_behavior in ("refuse", "clarify"):
+        return SKIP_SENTINEL
+
     grader = grader_llm.with_structured_output(CorrectnessGrade, method="json_schema")
     student_answer = (outputs or {}).get("answer", "")
     if not student_answer:
@@ -64,26 +92,31 @@ BEHAVIOR_PROMPT = """Kiểm tra xem AI có hành xử đúng theo expected_behav
 
 Quy tắc:
 - expected_behavior = "answer"   → AI phải trả lời trực tiếp có nội dung pháp lý cụ thể.
-- expected_behavior = "refuse"   → AI phải từ chối hoặc nói rõ ngoài phạm vi hỗ trợ.
-- expected_behavior = "clarify"  → AI phải hỏi lại để làm rõ thay vì tự trả lời.
+- expected_behavior = "refuse"   → AI phải từ chối lịch sự và nêu đúng lý do ngoài phạm vi.
+                                   AI có thể nói "Tôi không biết" hoặc redirect — vẫn compliant.
+                                   Nếu AI bịa ra thông tin pháp lý hoặc trả lời tùy tiện → Not compliant.
+- expected_behavior = "clarify"  → AI phải hỏi lại để làm rõ những thông tin còn thiếu
+                                   (ví dụ: loại xe, vận tốc cụ thể) thay vì tự trả lời.
+                                   Nếu AI đưa ra con số tiền phạt khi chưa đủ thông tin → Not compliant.
 
 Chú ý:
-- Với "refuse": AI có thể nói "Tôi không biết" hoặc redirect — đó vẫn là compliant.
 - Với "answer": Nếu AI từ chối câu có thể trả lời được → Not compliant.
-- Với "clarify": Nếu AI trả lời ngay mà không hỏi lại → Not compliant."""
+- Với "clarify": AI phải liệt kê đúng các thông tin còn thiếu để compliant."""
 
 def behavior_compliance(inputs: dict, outputs: dict, reference_outputs: dict) -> bool:
-    """Kiểm tra AI có hành xử đúng expected_behavior (answer/refuse/clarify) không."""
+    """
+    Kiểm tra AI có hành xử đúng expected_behavior (answer/refuse/clarify) không.
+
+    Đây là evaluator DUY NHẤT luôn được chấm với MỌI expected_behavior.
+    - refuse: Kiểm tra Bot từ chối lịch sự và đúng lý do.
+    - clarify: Kiểm tra Bot liệt kê đúng thông tin còn thiếu và KHÔNG đưa ra con số.
+    - answer:  Kiểm tra Bot trả lời trực tiếp có nội dung pháp lý.
+    """
     grader = grader_llm.with_structured_output(BehaviorGrade, method="json_schema")
     student_answer = (outputs or {}).get("answer", "")
     verdict = (outputs or {}).get("verdict", "")
 
-    # expected_behavior có thể nằm ở inputs HOẶC reference_outputs tùy dataset version
-    expected_behavior = (
-        (inputs or {}).get("expected_behavior")
-        or (reference_outputs or {}).get("expected_behavior")
-        or "answer"
-    )
+    expected_behavior = _get_expected_behavior(inputs, reference_outputs)
 
     if not student_answer and not verdict:
         # Không có output gì cả
@@ -116,7 +149,22 @@ Kiểm tra theo thứ tự:
 
 Grounded = False nếu phát hiện bất kỳ số tiền hoặc điều khoản nào không có trong FACTS."""
 
-def groundedness(inputs: dict, outputs: dict) -> bool:
+def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | None:
+    """
+    Kiểm tra câu trả lời có bị hallucinate so với retrieved context không.
+
+    Skip rules:
+    - refuse: Bot không được phép (và thường sẽ không) dẫn luật khi từ chối → skip (None).
+              Nếu Bot dẫn luật khi từ chối → đánh lỗi ở behavior_compliance.
+    - clarify: Tương tự, không có (hoặc không nên có) context liên quan → skip (None).
+    - answer:  Chấm bình thường.
+    """
+    expected_behavior = _get_expected_behavior(inputs, reference_outputs or {})
+
+    # Skip với refuse và clarify
+    if expected_behavior in ("refuse", "clarify"):
+        return SKIP_SENTINEL
+
     grader = grader_llm.with_structured_output(GroundednessGrade, method="json_schema")
     context = (outputs or {}).get("context", "")
     student_answer = (outputs or {}).get("answer", "")
@@ -150,7 +198,24 @@ Citation = False chỉ khi:
 - Cite điều khoản không tồn tại trong CONTEXT.
 - Cite Điều X nhưng gắn với mức phạt của Điều Y."""
 
-def citation_accuracy(inputs: dict, outputs: dict) -> bool:
+def citation_accuracy(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | None:
+    """
+    Kiểm tra tính chính xác của citation điều khoản trong câu trả lời.
+
+    Skip rules:
+    - refuse: Bot từ chối → không được phép dẫn luật linh tinh → skip (None).
+              Nếu Bot dẫn luật khi từ chối → đánh lỗi ở behavior_compliance.
+    - clarify: Optional — Bot có thể cite làm tiền đề hỏi lại ("Theo Điều 6...").
+               Vẫn chấm bình thường để phát hiện citation sai dù là câu clarify.
+    - answer:  Chấm bình thường.
+    """
+    expected_behavior = _get_expected_behavior(inputs, reference_outputs or {})
+
+    # Skip với refuse: Bot không được phép dẫn luật khi từ chối
+    if expected_behavior == "refuse":
+        return SKIP_SENTINEL
+
+    # Với clarify và answer: chấm bình thường
     grader = grader_llm.with_structured_output(CitationGrade, method="json_schema")
     context = (outputs or {}).get("context", "")
     student_answer = (outputs or {}).get("answer", "")
@@ -165,16 +230,28 @@ def citation_accuracy(inputs: dict, outputs: dict) -> bool:
 
 
 # ── Evaluator 5: Retrieval Node Match ────────────────────────────────────
-def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -> float:
+def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -> float | None:
     """
     So sánh node IDs đã retrieve với reference_nodes trong dataset.
 
+    Skip rules:
+    - refuse: Câu OOS mà bốc được node thì thường là bốc nhầm → không nên reward → skip (None).
+    - clarify: Rất quan trọng! Bot phải bốc đúng node mới biết hỏi lại gì → chấm bình thường.
+    - answer:  Chấm bình thường.
+
     Returns
     -------
-    float : tỉ lệ hit [0.0, 1.0]
-        = |retrieved ∩ reference| / |reference|
-        = 1.0 nếu không có reference_nodes (không đánh giá được)
+    float | None :
+        - None nếu skip (refuse)
+        - 1.0 nếu không có reference_nodes (không đánh giá được)
+        - tỉ lệ hit [0.0, 1.0] = |retrieved ∩ reference| / |reference|
     """
+    expected_behavior = _get_expected_behavior(inputs, reference_outputs)
+
+    # Skip với refuse: câu OOS không nên bốc được node nào
+    if expected_behavior == "refuse":
+        return SKIP_SENTINEL
+
     # reference_nodes nằm ở reference_outputs (LangSmith dataset) hoặc inputs (local)
     ref_nodes: list[str] = (
         (reference_outputs or {}).get("reference_nodes")

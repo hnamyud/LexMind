@@ -138,6 +138,37 @@ def _build_langsmith_compare_url(results) -> str:
     )
 
 
+def _extract_langsmith_url(results, experiment_id: str) -> str:
+    """Best-effort extract LangSmith URL from evaluate() result object.
+
+    LangSmith SDK có thể expose URL qua các field khác nhau tùy version.
+    Ưu tiên URL có sẵn từ SDK, fallback sang compare URL.
+    """
+    candidate_attrs = [
+        "url",
+        "experiment_url",
+        "session_url",
+        "project_url",
+        "results_url",
+    ]
+
+    for attr in candidate_attrs:
+        value = getattr(results, attr, None)
+        if isinstance(value, str) and value.strip().startswith("http"):
+            return value.strip()
+
+    compare_url = _build_langsmith_compare_url(results)
+    if compare_url:
+        return compare_url
+
+    # Fallback cuối: nếu SDK có tenant + experiment_id dạng project id.
+    tenant_id = getattr(results, "_tenant_id", None)
+    if tenant_id and experiment_id:
+        return f"https://smith.langchain.com/o/{tenant_id}/projects/p/{experiment_id}"
+
+    return ""
+
+
 def _create_langsmith_dataset_from_local(
     local_samples: list[dict],
     dataset_name: str,
@@ -249,13 +280,23 @@ def run_evaluation(
     }
 
     print("\n=== Evaluation Results ===")
+    print("(NaN = evaluator bị skip do expected_behavior không phù hợp)")
     for label, col in cols.items():
         if col in df.columns:
-            print(f"{label:<24} {df[col].mean():.1%}")
+            col_mean = df[col].mean()  # pandas tự bỏ qua NaN
+            if col_mean != col_mean:   # isnan check
+                print(f"{label:<24} SKIPPED (all NaN)")
+            else:
+                n_scored = df[col].notna().sum()
+                print(f"{label:<24} {col_mean:.1%}  (n={n_scored})")
         else:
             print(f"{label:<24} N/A (column missing)")
 
-    available = [c for c in cols.values() if c in df.columns]
+    # Overall chỉ tính trên các cột không toàn NaN
+    available = [
+        c for c in cols.values()
+        if c in df.columns and df[c].notna().any()
+    ]
     if available:
         overall = df[available].mean().mean()
         print(f"{'Overall':<24} {overall:.1%}")
@@ -263,15 +304,24 @@ def run_evaluation(
     # Parse DataFrame → records để service sync vào eval_runs
     run_records = _extract_run_records(df, data_source)
 
+    experiment_id = getattr(results, "experiment_id", None) or ""
+
+    def _safe_mean(col: str) -> float | None:
+        """Mean bỏ qua NaN; None nếu cột không tồn tại hoặc toàn NaN."""
+        if col not in df.columns:
+            return None
+        val = df[col].mean()  # NaN nếu toàn NaN
+        return None if val != val else round(float(val), 4)
+
     return {
         "results": results,
         "sample_count": len(data_source),
-        "experiment_id": getattr(results, "experiment_name", ""),
+        "experiment_id": experiment_id,
         "project_name": experiment_prefix,
-        "langsmith_url": _build_langsmith_compare_url(results),
+        "langsmith_url": _extract_langsmith_url(results, experiment_id),
         "run_records": run_records,   # ← list records sẵn sàng INSERT vào eval_runs
         "summary": {
-            label: (float(df[col].mean()) if col in df.columns else None)
+            label: _safe_mean(col)
             for label, col in cols.items()
         },
     }
@@ -326,16 +376,18 @@ def _extract_run_records(df, data_source: list[dict]) -> list[dict]:
         retrieved_nodes = ret_nodes_raw if isinstance(ret_nodes_raw, list) else []
 
         # ── LangSmith feedback scores ───────────────────────────────────────
-        # bool evaluators: LangSmith lưu True→1.0, False→0.0
-        # → dùng _score_bool() để convert về Python bool (hoặc None nếu missing)
+        # bool evaluators: LangSmith lưu True→1.0, False→0.0, NaN=skipped
+        # → _score_bool() trả về True/False/None (None = bị skip, KHÔNG phải False)
         score_correctness  = _score_bool(_col(row, "feedback.correctness"))
         score_groundedness = _score_bool(_col(row, "feedback.groundedness"))
         score_behavior     = _score_bool(_col(row, "feedback.behavior_compliance"))
         score_citation     = _score_bool(_col(row, "feedback.citation_accuracy"))
 
-        # float evaluator: retrieval_node_match trả về float thực 0.0–1.0
+        # float evaluator: retrieval_node_match trả về float thực 0.0–1.0 hoặc None nếu skip
         # → giữ nguyên precision, không ép về bool hay int
         retrieval_hit_rate = _score_float(_col(row, "feedback.retrieval_node_match"))
+
+        expected_beh = sample.get("expected_behavior", _col(row, "inputs.expected_behavior") or "")
 
         records.append({
             "question_id":        qid,
@@ -346,13 +398,15 @@ def _extract_run_records(df, data_source: list[dict]) -> list[dict]:
             "ai_answer":          answer,
             "context_text":       context,
             "question_type":      sample.get("question_type",     _col(row, "inputs.question_type")     or ""),
-            "expected_behavior":  sample.get("expected_behavior", _col(row, "inputs.expected_behavior") or ""),
+            "expected_behavior":  expected_beh,
             # Mapping 1:1 với schema DB mới
-            "score_correctness":  score_correctness,   # BOOLEAN
-            "score_groundedness": score_groundedness,  # BOOLEAN
-            "score_behavior":     score_behavior,       # BOOLEAN
-            "score_citation":     score_citation,       # BOOLEAN
-            "retrieval_hit_rate": retrieval_hit_rate,   # FLOAT 0.0–1.0
+            # None = evaluator bị skip do expected_behavior không phù hợp
+            # (DB nên lưu NULL thay vì FALSE để phân biệt skip vs. fail)
+            "score_correctness":  score_correctness,   # BOOLEAN | NULL
+            "score_groundedness": score_groundedness,  # BOOLEAN | NULL
+            "score_behavior":     score_behavior,       # BOOLEAN (luôn có)
+            "score_citation":     score_citation,       # BOOLEAN | NULL
+            "retrieval_hit_rate": retrieval_hit_rate,   # FLOAT 0.0–1.0 | NULL
         })
 
     return records

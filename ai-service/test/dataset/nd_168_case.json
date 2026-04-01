@@ -896,7 +896,7 @@
     ],
     "difficulty": "easy",
     "question_type": "adversarial",
-    "expected_behavior": "answer",
+    "expected_behavior": "refuse",
     "source_docs": [
       "nd168_2024"
     ],
@@ -1168,7 +1168,7 @@
   {
     "id": "q072",
     "question": "Kết hợp không có bảo hiểm trách nhiệm dân sự và chở hàng nguy hiểm, xử phạt tổng thể?",
-    "ground_truth": "Trường hợp thực hiện nhiều hành vi vi phạm, người vi phạm sẽ bị phạt tiền đối với từng hành vi [3]. Đối với ô tô, lỗi không có bảo hiểm trách nhiệm dân sự bắt buộc bị phạt từ 400.000 đến 600.000 đồng [4]. Lỗi vi phạm về vận chuyển hàng hóa nguy hiểm sẽ bị xử phạt theo mức từ 1.000.000 đồng đến 14.000.000 đồng tùy hành vi cụ thể (ví dụ: không dán nhãn phạt 4 - 6 triệu [5], không có giấy phép phạt 12 - 14 triệu [5]). Tổng thể, mức phạt tiền là cộng dồn của hai hành vi này, kèm theo các hình thức xử phạt bổ sung (như trừ điểm GPLX) của lỗi vận chuyển hàng nguy hiểm nếu có [6, 7].",
+    "ground_truth": "Trường hợp thực hiện nhiều hành vi vi phạm, người vi phạm sẽ bị phạt tiền đối với từng hành vi. Đối với ô tô, lỗi không có bảo hiểm trách nhiệm dân sự bắt buộc bị phạt từ 400.000 đến 600.000 đồng Lỗi vi phạm về vận chuyển hàng hóa nguy hiểm sẽ bị xử phạt theo mức từ 1.000.000 đồng đến 14.000.000 đồng tùy hành vi cụ thể (ví dụ: không dán nhãn phạt 4 - 6 triệu, không có giấy phép phạt 12 - 14 triệu). Tổng thể, mức phạt tiền là cộng dồn của hai hành vi này, kèm theo các hình thức xử phạt bổ sung (như trừ điểm GPLX) của lỗi vận chuyển hàng nguy hiểm nếu có.",
     "reference_nodes": ["d5_k2", "d18_k4_c", "d23_k3", "d23_k5"],
     "difficulty": "hard",
     "question_type": "multi_hop",
