@@ -271,9 +271,12 @@ class RAGService:
         """
         # Đọc enable_web_search từ config (LangGraph truyền vào node, không phải routing fn)
         enable_web_search = True
+        enable_cache = True
         if config and "configurable" in config:
             enable_web_search = config["configurable"].get("enable_web_search", True)
+            enable_cache = config["configurable"].get("enable_cache", True)
         logging.info(f"[STEP1] enable_web_search={enable_web_search}")
+        logging.info(f"[STEP1] enable_cache={enable_cache}")
 
         messages = list(state.get("messages", []))
 
@@ -281,7 +284,7 @@ class RAGService:
         recent_msgs = chat_msgs[-5:]  # Lấy 5 tin nhắn gần đây nhất (cả Hỏi và Đáp) làm ngữ cảnh
 
         if not recent_msgs:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search}
+            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search, "enable_cache": enable_cache}
 
         # Lấy câu hỏi cuối cùng của user
         last_question = ""
@@ -291,7 +294,7 @@ class RAGService:
                 break
 
         if not last_question:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search}
+            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search, "enable_cache": enable_cache}
 
         # Định dạng ngữ cảnh từ lịch sử gần nhất để Router hiểu ý câu hỏi nối tiếp
         history_text = "\n".join([f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent_msgs])
@@ -350,10 +353,11 @@ class RAGService:
                 "sub_queries": validated_subs,
                 "complexity_level": complexity_level,
                 "enable_web_search": enable_web_search,  # lưu vào state để routing fn đọc
+                "enable_cache": enable_cache,
             }
         except Exception as e:
             logging.error(f"[STEP1] Lỗi: {e} — fallback use_tool")
-            return {"route": "use_tool", "legal_query": question, "entities": {}, "response_style": "legal", "sub_queries": [], "complexity_level": 2, "enable_web_search": enable_web_search}
+            return {"route": "use_tool", "legal_query": question, "entities": {}, "response_style": "legal", "sub_queries": [], "complexity_level": 2, "enable_web_search": enable_web_search, "enable_cache": enable_cache}
 
     # ------------------------------------------------------------------
     # Step 2 — Retriever (parallel multi-violation via asyncio.gather)
@@ -841,16 +845,37 @@ class RAGService:
     # Cache Check (sau router_rewrite, trước retriever)
     # ------------------------------------------------------------------
 
-    async def _node_cache_check(self, state: RAGState) -> dict:
+    async def _node_cache_check(self, state: RAGState, config: dict = None) -> dict:
         """
         Kiểm tra Semantic Cache sau khi router_rewrite đã bóc tách entities.
 
         Dùng legal_query (đã chuẩn hóa) làm input tìm kiếm cache.
         Nếu HIT → set cache_hit=True, cached_response=response text.
         Nếu MISS → set cache_hit=False, pipeline tiếp tục bình thường.
+
+        Ưu tiên nguồn enable_cache:
+          1. config["configurable"]["enable_cache"]  ← cao nhất (eval path)
+          2. state["enable_cache"]                   ← từ router_rewrite node
+          3. True (default — production)
         """
         legal_query = state.get("legal_query", "")
         entities = state.get("entities", {})
+
+        # Config từ LangGraph.invoke() có precedence cao nhất — đảm bảo eval
+        # luôn force MISS dù state cũ (checkpointer) có enable_cache=True
+        enable_cache_from_config: bool | None = None
+        if config and "configurable" in config:
+            enable_cache_from_config = config["configurable"].get("enable_cache")
+
+        if enable_cache_from_config is not None:
+            enable_cache = bool(enable_cache_from_config)
+        else:
+            enable_cache = state.get("enable_cache", True)
+
+        if not enable_cache:
+            source = "config" if enable_cache_from_config is not None else "state"
+            logging.info(f"[STEP1.5] Cache DISABLED (source={source}) → force MISS")
+            return {"cache_hit": False, "cached_response": ""}
 
         if not self._cache or not self._cache.is_connected or not legal_query:
             return {"cache_hit": False, "cached_response": ""}
@@ -1183,7 +1208,13 @@ class RAGService:
     # Pipeline streaming (LangGraph astream_events v2)
     # ------------------------------------------------------------------
 
-    async def ask_stream(self, question: str, conversation_id: str | None = None):
+    async def ask_stream(
+        self,
+        question: str,
+        conversation_id: str | None = None,
+        enable_web_search: bool = True,
+        enable_cache: bool = True,
+    ):
         import time
 
         initial_state: dict = {
@@ -1191,12 +1222,21 @@ class RAGService:
         }
 
         thread_id = conversation_id or "default"
+        logging.info(
+            f"[ASK] thread_id={thread_id} | enable_web_search={enable_web_search} | enable_cache={enable_cache}"
+        )
         graph_config = {
-            "configurable": {"thread_id": thread_id},
+            "configurable": {
+                "thread_id": thread_id,
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
+            },
             "run_name": f"RAG Pipeline — {question[:50]}",
             "metadata": {
                 "conversation_id": conversation_id or "default",
                 "thread_id": thread_id,
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
             },
         }
         collected_sources: list[dict] = []
@@ -1208,6 +1248,7 @@ class RAGService:
         final_entities = {}  # Entities từ router_rewrite
         final_legal_query = ""  # Legal query từ router_rewrite
         final_verdict = ""  # Reflector verdict (để gate cache store)
+        final_context = ""  # Context cuối cùng từ retriever/web_search để trả metadata
 
         # Buffer để parse thẻ <thinking> từ chuỗi văn bản của Kimi
         tag_buffer = ""
@@ -1420,6 +1461,7 @@ class RAGService:
                     elif isinstance(output, dict):
                         ctx = output.get("context", "")
                         if ctx and isinstance(ctx, str):
+                            final_context = ctx
                             if evt_name == "retriever":
                                 collected_sources.extend(RAGService._extract_graph_sources(ctx))
                                 # ── Yield legal anchor process event ─────────
@@ -1546,13 +1588,26 @@ class RAGService:
 
         # Send metrics before metadata and done
         yield json.dumps({"type": "metrics", "content": metrics}, ensure_ascii=False) + "\n"
-        yield json.dumps({"type": "metadata", "content": {"sources": collected_sources}}, ensure_ascii=False) + "\n"
+        yield json.dumps(
+            {
+                "type": "metadata",
+                "content": {
+                    "sources": collected_sources,
+                    "context": final_context,
+                    "reflector_verdict": final_verdict,
+                    "cacheHit": is_cache_hit,
+                    "nodeTimings": node_breakdown,
+                },
+            },
+            ensure_ascii=False,
+        ) + "\n"
         yield json.dumps({"type": "done"}, ensure_ascii=False) + "\n"
 
         # ── Cache Store (fire-and-forget, chỉ khi verdict=sufficient) ─────
         if (
             self._cache
             and self._cache.is_connected
+            and enable_cache
             and final_route == "use_tool"
             and not is_cache_hit
             and final_verdict == "sufficient"  # chỉ cache response đã qua reflector và được approved

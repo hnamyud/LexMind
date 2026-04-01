@@ -15,6 +15,7 @@ import { LoggerMiddleware } from './core/middleware/logger.middleware';
 import { CaslModule } from './core/casl/casl.module';
 import { FeedbacksModule } from './modules/feedbacks/feedbacks.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { EvalModule } from './modules/eval/eval.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
 import { APP_GUARD } from '@nestjs/core';
@@ -59,6 +60,7 @@ import { APP_GUARD } from '@nestjs/core';
     ChatModule,
     RedisModule,
     AdminModule,
+    EvalModule,
   ],
   controllers: [AppController],
   providers: [

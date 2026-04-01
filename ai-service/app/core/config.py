@@ -24,8 +24,8 @@ class Settings:
     # Redis Semantic Cache (cần Redis Stack cho RediSearch module)
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
     INTERNAL_SECRET: str = os.getenv("X-Internal-Secret")
-    FASTAPI_URI: str = os.getenv("FASTAPI_URI")
-    FASTAPI_PORT: str = os.getenv("FASTAPI_PORT")
+    FASTAPI_URI: str = os.getenv("FASTAPI_URI", "127.0.0.1")
+    FASTAPI_PORT: int = int(os.getenv("FASTAPI_PORT", "8001"))
 
     # LangSmith Tracing
     LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "false")

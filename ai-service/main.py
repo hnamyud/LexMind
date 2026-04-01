@@ -1,4 +1,6 @@
 import logging
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,8 +9,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
 from app.core.checkpoint import build_checkpointer, close_checkpointer
 from app.services.rag_service import RAGService
+from app.eval.migrations import run_eval_migrations
+from app.eval.service import EvalService
 
 from app.core.config import settings
+
+# psycopg async pool is not compatible with ProactorEventLoop on Windows.
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # ---------------------------------------------------------------------------
 # LangSmith Tracing Configuration
@@ -53,6 +61,13 @@ async def lifespan(app: FastAPI):
     # Lưu vào app.state để các route có thể truy cập
     app.state.rag_service = svc
     app.state.checkpointer = checkpointer
+
+    # Bước 3: Khởi tạo Eval pipeline
+    logging.info("⏳ Đang khởi tạo Eval service...")
+    pool = checkpointer.conn  # Tái dụng cùng AsyncConnectionPool
+    await run_eval_migrations(pool)
+    app.state.eval_service = EvalService(pool=pool, rag_service=svc)
+    app.state.eval_pool = pool
 
     logging.info("✅ Toàn bộ service đã sẵn sàng!")
 

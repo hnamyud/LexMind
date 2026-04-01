@@ -16,6 +16,7 @@ class RAGState(TypedDict):
     response_style: str    # "legal" (format cứng, trích dẫn luật) | "natural" (thân thiện)
     complexity_level: int  # 1=Simple | 2=Medium | 3=Complex — điều chỉnh thinking budget
     enable_web_search: bool  # False khi chạy RAGAS experiment — đọc từ config trong router node
+    enable_cache: bool  # False khi cần benchmark/eval để bỏ qua semantic cache
 
     # ── Step 1b: Sub-query decomposition (multi-violation) ───────────────────
     sub_queries: List[dict]    # [{"legal_query": "...", "entities": {...}, "label": "..."}, ...]

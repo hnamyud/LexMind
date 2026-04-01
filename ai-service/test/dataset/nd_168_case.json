@@ -46,8 +46,8 @@
   {
     "id": "q005",
     "question": "Theo Nghị định 168, nồng độ cồn dưới 50 mg/100ml máu đối với xe máy bị phạt bao nhiêu?",
-    "ground_truth": "Căn cứ điểm a khoản 6 và điểm a khoản 13 Điều 7 của Nghị định 168/2024/NĐ-CP, người điều khiển xe máy trên đường mà trong máu có nồng độ cồn chưa vượt quá 50 miligam/100 mililít máu sẽ bị phạt tiền từ 2.000.000 đồng đến 3.000.000 đồng. Đồng thời, người vi phạm sẽ bị trừ 02 điểm Giấy phép lái xe.",
-    "reference_nodes": ["d7_k6_a", "d7_k13_a"],
+    "ground_truth": "Căn cứ điểm a khoản 6 và điểm a khoản 13 Điều 7 của Nghị định 168/2024/NĐ-CP, người điều khiển xe máy trên đường mà trong máu có nồng độ cồn chưa vượt quá 50 miligam/100 mililít máu sẽ bị phạt tiền từ 2.000.000 đồng đến 3.000.000 đồng. Đồng thời, người vi phạm sẽ bị trừ 04 điểm Giấy phép lái xe.",
+    "reference_nodes": ["d7_k6_a", "d7_k13_b"],
     "difficulty": "easy",
     "question_type": "factual",
     "expected_behavior": "answer",

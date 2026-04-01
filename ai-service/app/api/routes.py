@@ -1,16 +1,19 @@
 import logging
+import json
 import yaml
 from pathlib import Path
+from typing import List, Optional
 
 import neo4j
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from langchain_core.messages import HumanMessage as LCHumanMessage
 
 from app.core.config import settings
 from app.services.rag_service import _extract_ai_text
+from app.eval.service import EvalService
 
 router = APIRouter()
 
@@ -29,6 +32,8 @@ def verify_internal_secret(api_key: str = Depends(api_key_header)):
 class AskRequest(BaseModel):
     question: str
     conversation_id: str | None = None
+    enable_web_search: bool = True
+    enable_cache: bool = True
 
 
 class GenerateTitleRequest(BaseModel):
@@ -389,7 +394,12 @@ async def ask_question_stream(request: Request, body: AskRequest):
         raise HTTPException(status_code=400, detail="Câu hỏi không được để trống.")
     svc = _get_service(request)
     return StreamingResponse(
-        svc.ask_stream(body.question, body.conversation_id),
+        svc.ask_stream(
+            body.question,
+            body.conversation_id,
+            enable_web_search=body.enable_web_search,
+            enable_cache=body.enable_cache,
+        ),
         media_type="application/x-ndjson",
     )
 
@@ -418,4 +428,201 @@ async def clear_conversation_checkpoint(conversation_id: str, request: Request):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Lỗi khi xóa checkpoint: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Eval — Batch Evaluation + Manual Scoring
+# ---------------------------------------------------------------------------
+
+class RunBatchRequest(BaseModel):
+    dataset: str = "nd_168_case.json"
+    source_doc: Optional[str] = None   # Chỉ chấm câu thuộc 1 tài liệu nguồn cụ thể
+    concurrency: int = 1               # Default 1 — an toàn nhất cho eval (tránh cache race)
+    limit: Optional[int] = None        # None = chạy hết; N = chạy tối đa N câu
+    random_sample: bool = True         # True = bốc ngẫu nhiên khi có limit; False = lấy từ đầu
+    offset: int = 0                    # Bỏ qua N câu đầu (chỉ dùng khi random_sample=False)
+    question_ids: Optional[List[str]] = None  # Nếu set → chỉ chạy các câu này (ignore limit/random)
+
+    @field_validator("concurrency")
+    @classmethod
+    def concurrency_range(cls, v: int) -> int:
+        if not (1 <= v <= 10):
+            raise ValueError("concurrency phải từ 1 đến 10")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def limit_positive(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
+            raise ValueError("limit phải > 0")
+        return v
+
+    @field_validator("offset")
+    @classmethod
+    def offset_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("offset phải >= 0")
+        return v
+
+
+
+def _get_eval_service(request: Request):
+    svc = getattr(request.app.state, "eval_service", None)
+    if not svc:
+        raise HTTPException(status_code=503, detail="Eval service chưa được khởi tạo.")
+    return svc
+
+
+@router.get(
+    "/eval/datasets",
+    tags=["Eval"],
+    dependencies=[Depends(verify_internal_secret)],
+    summary="Danh sách các bộ test/dataset hiện có",
+)
+async def eval_list_datasets(request: Request):
+    """Trả về danh sách dataset kèm source_docs có thể filter."""
+    dataset_dir = Path(__file__).parent.parent.parent / "test" / "dataset"
+    if not dataset_dir.exists():
+        return {"datasets": []}
+
+    datasets = []
+    for f in dataset_dir.glob("*.json"):
+        source_docs = set()
+        try:
+            with open(f, encoding="utf-8") as fp:
+                data = json.load(fp)
+            for item in data if isinstance(data, list) else []:
+                for src in item.get("source_docs", []) or []:
+                    source_docs.add(src)
+        except Exception:
+            source_docs = set()
+
+        datasets.append(
+            {
+                "name": f.name,
+                "source_docs": sorted(source_docs),
+            }
+        )
+
+    return {
+        "datasets": datasets,
+        "dataset_names": [d["name"] for d in datasets],
+    }
+
+
+
+@router.post(
+    "/eval/run-batch",
+    tags=["Eval"],
+    dependencies=[Depends(verify_internal_secret)],
+    summary="Kích hoạt batch evaluation qua dataset",
+)
+async def eval_run_batch(
+    body: RunBatchRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Chạy toàn bộ dataset qua LangGraph pipeline.
+    - Trả về `session_id` ngay lập tức.
+    - Batch chạy nền, polling tiến trình qua `GET /eval/results/{session_id}`.
+    - Web search tự động bị tắt trong quá trình eval.
+    """
+    eval_svc = _get_eval_service(request)
+    try:
+        tracking = await eval_svc.run_batch(
+            dataset_filename=body.dataset,
+            concurrency=body.concurrency,
+            limit=body.limit,
+            random_sample=body.random_sample,
+            offset=body.offset,
+            question_ids=body.question_ids,
+            source_doc=body.source_doc,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"[/eval/run-batch] {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi khi khởi động batch: {str(e)}")
+
+    session_id = tracking["session_id"]
+
+    return {
+        "status": "started",
+        "session_id": session_id,
+        "dataset": tracking.get("dataset", body.dataset),
+        "source_doc": tracking.get("source_doc"),
+        "project_name": tracking.get("project_name", ""),
+        "experiment_id": tracking.get("experiment_id", ""),
+        "langsmith_url": tracking.get("langsmith_url", ""),
+        "total": tracking.get("total"),
+        "message": f"Batch đã bắt đầu. Xem real-time tại Langsmith URL (đính kèm) hoặc polling GET /eval/results/{session_id}",
+    }
+
+
+@router.get(
+    "/eval/sessions",
+    tags=["Eval"],
+    dependencies=[Depends(verify_internal_secret)],
+    summary="Danh sách các phiên eval gần đây",
+)
+async def eval_list_sessions(request: Request, limit: int = 20):
+    eval_svc = _get_eval_service(request)
+    sessions = await eval_svc.list_sessions(limit=limit)
+    return {"sessions": sessions}
+
+
+@router.get(
+    "/eval/results/{session_id}",
+    tags=["Eval"],
+    dependencies=[Depends(verify_internal_secret)],
+    summary="Kết quả từng câu trong session kèm retrieved_nodes",
+)
+async def eval_get_results(session_id: str, request: Request):
+    """
+    Trả về:
+    - Thông tin session (status, progress)
+    - List eval_runs kèm:
+        - retrieved_nodes (thực tế từ RAG)
+        - reference_nodes (kỳ vọng từ dataset)
+        - retrieval_hit_rate (% khớp)
+        - retrieval_missing / retrieval_extra
+        - Tất cả scoring fields
+    """
+    eval_svc = _get_eval_service(request)
+
+    session = await eval_svc.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session không tồn tại: {session_id}")
+
+    runs = await eval_svc.get_results(session_id)
+    return {
+        "session": session,
+        "runs": runs,
+        "total": len(runs),
+    }
+
+
+@router.get(
+    "/eval/stats/{session_id}",
+    tags=["Eval"],
+    dependencies=[Depends(verify_internal_secret)],
+    summary="Thống kê tổng hợp cho một session",
+)
+async def eval_get_stats(session_id: str, request: Request):
+    """
+    Tính toán sẵn các chỉ số:
+    - Avg score theo từng chiều
+    - Avg retrieval hit rate
+    - Phân bố issues
+    - Breakdown theo difficulty
+    """
+    eval_svc = _get_eval_service(request)
+    session = await eval_svc.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session không tồn tại: {session_id}")
+    stats = await eval_svc.get_session_stats(session_id)
+    return stats
 
