@@ -68,7 +68,7 @@ Hệ thống chatbot hỗ trợ tra cứu và tư vấn luật giao thông Việ
 | Cache & Queue | Redis (ioredis) | 5.10.0 |
 | AI Framework | FastAPI | 0.115.9 |
 | LLM Orchestration | LangGraph | 1.0.9 |
-| LLM Model | Google Gemini 2.5 Flash | Latest |
+| LLM Model | Google Gemini (3.0 Flash, 3.1 Flash Lite) | Latest |
 | Knowledge Graph | Neo4j | 5.28.1 |
 | Embeddings | SentenceTransformers (vietnamese-sbert) | 4.1.0 |
 | Web Search | Serper.dev + Firecrawl | Via SDK |
@@ -250,10 +250,6 @@ Bao gồm các endpoint phục vụ backend-core:
 8. NestJS kích hoạt **Event** sinh tiêu đề nếu là tin nhắn đầu.
 
 ---
-
-## Biến môi trường
-
-*(Xem README cũ để biết chi tiết biến môi trường giống như trước)*
 
 ## Hướng dẫn cài đặt & chạy
 Sử dụng script `dev.ps1` ở thư mục root để start cả 2 services cùng một lúc.

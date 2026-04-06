@@ -96,6 +96,9 @@ class RAGService:
         self._user = settings.NEO4J_USER
         self._password = settings.NEO4J_PASSWORD
         self._api_key = settings.GOOGLE_API_KEY
+        self._llm_router_model = settings.LLM_ROUTER
+        self._llm_generator_model = settings.LLM_GENERATOR
+        self._llm_reflector_model = settings.LLM_REFLECTOR
         self._api_key_vertex = settings.VERTEX_AI_API_KEY
         self._api_key_serper = settings.SERPER_API_KEY
         self._api_key_firecrawl = settings.FIRECRAWL_API_KEY
@@ -182,57 +185,57 @@ class RAGService:
             return
         try:
             self._llm_router = ChatGoogleGenerativeAI(
-                model="gemini-3.1-flash-lite-preview",
+                model=self._llm_router_model,
                 google_api_key=self._api_key,
                 temperature=0,
             )
 
             # ── Generator LLMs (Complexity Level 1/2/3) ────────────────────────
-            # Level 1 — Simple: tắt thinking hoàn toàn (thinking_budget=0)
+            # Level 1 — Simple: có thể thinking(rất ít) hoặc không
             self._llm_gen_l1 = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",
+                model=self._llm_generator_model,
                 google_api_key=self._api_key,
                 temperature=0,
-                include_thoughts=False,
-                thinking_budget=0,
+                thinking_level="low",
+                include_thoughts=False,  
                 streaming=True,
             )
             # Level 2 — Medium: thinking vừa phải
             self._llm_gen_l2 = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",
+                model=self._llm_generator_model,
                 google_api_key=self._api_key,
                 temperature=0,
+                thinking_level="medium",
                 include_thoughts=True,
-                thinking_budget=2048,
                 streaming=True,
             )
             # Level 3 — Complex: full thinking
             self._llm_gen_l3 = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",
+                model=self._llm_generator_model,
                 google_api_key=self._api_key,
-                temperature=0,
+                temperature=0,               
+                thinking_level="high",
                 include_thoughts=True,
-                thinking_budget=4096,
                 streaming=True,
             )
 
             # ── Reflector LLMs (budget = Generator / 4) ────────────────────────
             # Level 1: Reflector bị tắt hoàn toàn — không cần instance
-            # Level 2: 2048 / 4 = 512
+            # Level 2: 
             self._llm_ref_l2 = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",
+                model=self._llm_reflector_model,
                 google_api_key=self._api_key,
                 temperature=0,
-                include_thoughts=True,
-                thinking_budget=512,
+                thinking_level="low",
+                # thinking_budget=512,               
             )
-            # Level 3: 4096 / 4 = 1024
+            # Level 3: 
             self._llm_ref_l3 = ChatGoogleGenerativeAI(
-                model="gemini-3-flash-preview",
+                model=self._llm_reflector_model,
                 google_api_key=self._api_key,
                 temperature=0,
-                include_thoughts=True,
-                thinking_budget=1024,
+                thinking_level="medium",
+                # thinking_budget=1024,
             )
 
             # Alias _llm → _llm_gen_l2 (backward-compat cho agent_direct)

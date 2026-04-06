@@ -317,6 +317,12 @@ template: |
          + Hình phạt bổ sung nặng nhất: [tước bằng dài nhất, tạm giữ xe dài nhất]
    3. Nếu một phần ghi "(Không tìm thấy thông tin...)", nêu rõ rằng
       không có dữ liệu cho vi phạm đó trong Nghị định 168 và khuyến nghị tra cứu thêm.
+   
+   4. Nguyên tắc cộng dồn điểm GPLX (Điều 50 NDD168/2024)
+      • Nếu có từ 02 hành vi vi phạm trở lên bị trừ điểm trong cùng một lần xử phạt
+         → CHỈ trừ điểm của hành vi bị trừ NHIỀU NHẤT, không cộng dồn
+      • Nếu điểm còn lại ít hơn điểm bị trừ → trừ hết số điểm còn lại
+      • Không trừ điểm khi GPLX đang trong thời hạn bị tước
 
    ═══════════════════════════════════════════════════════════════
    KỸ NĂNG SINH TỒN (SURVIVAL RULES) — CHỐNG VÒNG LẶP SUY LUẬN
