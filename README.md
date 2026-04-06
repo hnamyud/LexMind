@@ -1,19 +1,52 @@
-# Chatbot Luật Giao Thông Việt Nam 🇻🇳
+# LexMind — Chatbot Tư Vấn Luật Giao Thông Việt Nam 🇻🇳
 
-Hệ thống chatbot hỗ trợ tra cứu và tư vấn luật giao thông Việt Nam (Nghị định 168/2024/NĐ-CP), sử dụng kiến trúc **RAG (Retrieval-Augmented Generation)** kết hợp **Knowledge Graph** và **Web Search** để cung cấp câu trả lời chính xác, có trích dẫn nguồn. Hệ thống cũng có khả năng nhận biết ngữ cảnh để trả lời tự nhiên (natural) hoặc chuẩn mực pháp lý (legal).
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
+[![NestJS](https://img.shields.io/badge/NestJS-11-red.svg)](https://nestjs.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)](https://fastapi.tiangolo.com/)
+
+Hệ thống chatbot AI hỗ trợ tra cứu và tư vấn **Nghị định 168/2024/NĐ-CP** và **Luật Đường bộ 2024**, sử dụng kiến trúc **RAG (Retrieval-Augmented Generation)** kết hợp **Knowledge Graph Neo4j** và **Web Search** để cung cấp câu trả lời chính xác, có trích dẫn nguồn pháp lý. Hệ thống tự động nhận biết ngữ cảnh để phản hồi theo phong cách tự nhiên hoặc chuẩn mực pháp lý.
+
+---
 
 ## Mục lục
 
+- [Động lực & Mục tiêu](#động-lực--mục-tiêu)
+- [Tính năng nổi bật](#tính-năng-nổi-bật)
 - [Kiến trúc hệ thống](#kiến-trúc-hệ-thống)
 - [Tech Stack](#tech-stack)
 - [Cấu trúc thư mục](#cấu-trúc-thư-mục)
 - [Database Schema](#database-schema)
 - [AI Service — RAG Pipeline](#ai-service--rag-pipeline)
-- [Backend Core — NestJS API](#backend-core--nestjs-api)
 - [API Endpoints](#api-endpoints)
-- [Luồng hoạt động](#luồng-hoạt-động)
-- [Biến môi trường](#biến-môi-trường)
 - [Hướng dẫn cài đặt & chạy](#hướng-dẫn-cài-đặt--chạy)
+- [Biến môi trường](#biến-môi-trường)
+- [Đóng góp](#đóng-góp)
+- [License](#license)
+
+---
+
+## Động lực & Mục tiêu
+
+Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều điều khoản phức tạp khiến người dân khó tra cứu chính xác. Nghị định 168/2024/NĐ-CP với mức phạt mới đã gây ra nhiều thắc mắc trong cộng đồng.
+
+**LexMind** ra đời để:
+- Giúp người dân tra cứu mức phạt, quy định giao thông nhanh chóng và chính xác
+- Cung cấp câu trả lời có trích dẫn nguồn pháp lý cụ thể, tránh thông tin sai lệch
+- Hỗ trợ cả câu hỏi thông thường lẫn câu hỏi pháp lý chuyên sâu qua cùng một giao diện
+
+---
+
+## Tính năng nổi bật
+
+- **Hybrid RAG**: Kết hợp Knowledge Graph (Neo4j) + Vector Search + Web Search để truy xuất thông tin toàn diện
+- **LangGraph Agent**: Pipeline ReAct với Router tự động phân loại câu hỏi (pháp lý / đời thường)
+- **Streaming Response**: Trả lời theo thời gian thực qua Server-Sent Events
+- **Survival Rule**: Reflector tự nhận biết vùng xám pháp lý, tránh phán đoán sai
+- **Xác thực đa phương thức**: JWT, Local Auth, Google OAuth, OTP
+- **Auto-title**: Tự động sinh tiêu đề hội thoại bằng AI sau tin nhắn đầu tiên
+- **Feedback Loop**: Like/dislike từng câu trả lời để cải thiện chất lượng
 
 ---
 
@@ -106,7 +139,7 @@ Chatbot-law/
 └── ai-service/                 # FastAPI AI Server
     ├── main.py                 # Entry point (port 8001)
     └── app/
-        ├── api/routes.py       # API endpoints (bao gồm /conversations/generate-title)
+        ├── api/routes.py       # API endpoints
         ├── core/               # Checkpoint, State schema
         ├── services/
         │   └── rag_service.py  # RAG pipeline & LangGraph graph
@@ -157,13 +190,11 @@ Chatbot-law/
 | **Message** | Tin nhắn (`user` / `bot`). Lưu suy luận vào `thought`. `metadata` lưu nguồn tham khảo (URL, tiêu đề web, trích dẫn). |
 | **Feedback** | Đánh giá tính hữu ích của câu trả lời. |
 
-Ngoài ra, LangGraph kiểm soát 4 bảng checkpoint tự động sinh.
+> LangGraph quản lý thêm 4 bảng checkpoint tự động sinh riêng.
 
 ---
 
 ## AI Service — RAG Pipeline
-
-### Kiến trúc LangGraph nâng cao
 
 ```text
                      ┌─────────┐
@@ -171,93 +202,137 @@ Ngoài ra, LangGraph kiểm soát 4 bảng checkpoint tự động sinh.
                      └────┬────┘
                           ▼
                    ┌──────────────┐
-                   │    Router    │ (Phân loại: Tự nhiên vs Pháp lý)
+                   │    Router    │ ── Phân loại: Tự nhiên vs Pháp lý
                    └──────┬───────┘
                           ▼
             ┌─────────────┴─────────────┐
             ▼                           ▼
       ┌────────────┐             ┌────────────┐
-      │  Natural   │             │   Legal    │
-      │  Agent     │             │   Agent    │◀────────────┐
+      │  Natural   │             │   Legal    │◀────────────┐
+      │  Agent     │             │   Agent    │             │
       └────────────┘             └──────┬─────┘             │
-            │                           │ (Reasoning)       │
-            │                           ▼                   │
-            │                    ┌──────────────┐           │
-            │                    │    Tools     │───────────┘
-            │                    │ (Neo4j, Web) │
-            │                    └──────┬───────┘
-            │                           ▼
-            │                    ┌──────────────┐
-            │                    │  Reflector   │ (Kiểm tra chất lượng, Survival rule)
-            │                    └──────────────┘
+            │                          │ (ReAct Reasoning)  │
+            │                          ▼                    │
+            │                   ┌──────────────┐            │
+            │                   │    Tools     │────────────┘
+            │                   │ (Neo4j, Web) │
+            │                   └──────┬───────┘
+            │                          ▼
+            │                   ┌──────────────┐
+            │                   │  Reflector   │ ── Kiểm tra chất lượng + Survival Rule
+            │                   └──────────────┘
             └─────────────┬─────────────┘
                           ▼
                    ┌──────────────┐
-                   │  Synthesis   │ (Kết xuất chuẩn form)
+                   │  Synthesis   │ ── Kết xuất chuẩn form pháp lý
                    └──────────────┘
 ```
 
-### Response Tags & Survival Rule
+**Các cơ chế chính:**
 
-- **Router**: Tự động đánh URL `response_style="legal"` hoặc `"natural"`. Nếu là câu hỏi giao tiếp đời thường, bot trả lời thân thiện (sử dụng `synthesis_natural.yaml`).
-- **Reflector + Survival Rule**: Khi phải đối mặt với các tình huống mới chưa có quy định, hệ thống kích hoạt tự vệ (survival rule) để suy luận tìm luật gần nhất hoặc thừa nhận nếu đó là vùng xám, tránh phán bừa.
-
----
-
-## Backend Core — NestJS API
-
-Backend-Core giờ đây kết hợp kiến trúc **Event-Driven**:
-
-- **Tự động sinh tiêu đề**: Khi một hội thoại mới diễn ra, ChatService kích hoạt sự kiện `conversation.title_needed`. `TitleGeneratorService` (chạy nền) sẽ lấy câu hỏi gọi sang AI Service `POST /conversations/generate-title` để sinh tên phiên và lưu DB một cách trong suốt (`@nestjs/event-emitter`).
-
-### Các Response tiêu chuẩn
-Chuẩn hóa API với định dạng: `{ "statusCode": 200, "message": "Thành công!", "data": { ... } }`
+- **Router**: Tự động gán `response_style="legal"` hoặc `"natural"`. Câu hỏi giao tiếp thường ngày sẽ được xử lý nhẹ nhàng hơn qua `synthesis_natural.yaml`.
+- **Survival Rule**: Khi gặp tình huống chưa có quy định rõ ràng, Reflector kích hoạt cơ chế tự vệ — suy luận tìm luật gần nhất hoặc thừa nhận vùng xám thay vì phán đoán sai.
+- **Event-Driven Auto-title**: Sau tin nhắn đầu, NestJS phát sự kiện `conversation.title_needed`. `TitleGeneratorService` chạy nền gọi AI Service để sinh tên phiên và lưu DB một cách trong suốt.
 
 ---
 
 ## API Endpoints
 
-### Authentication & Config — `/api/v1/auth`
-| Các API hỗ trợ Register, Login bằng JWT & Local, SSO bằng Google OAuth, và xác minh OTP phục vụ đổi password. |
+### Authentication — `/api/v1/auth`
+
+Hỗ trợ Register, Login (JWT & Local), SSO (Google OAuth), xác minh OTP để đổi mật khẩu.
 
 ### Chat — `/api/v1/chat`
+
 | Method | Endpoint | Mô tả | Guard |
 |--------|----------|--------|-------|
-| POST | `/ask/stream` | Stream trả lời từ AI theo Server-Sent Events | JWT |
+| POST | `/ask/stream` | Stream trả lời từ AI qua Server-Sent Events | JWT |
 | POST | `/regenerate/:messageId` | Xóa checkpoint lỗi, yêu cầu AI sinh lại | JWT |
-| GET | `/law-detail/:nodeId` | Lấy chi tiết luật giao thông từ Neo4j | JWT |
+| GET | `/law-detail/:nodeId` | Lấy chi tiết điều luật từ Neo4j | JWT |
 
 ### AI Service (Internal) — `http://127.0.0.1:8001`
-Bao gồm các endpoint phục vụ backend-core:
+
 | Method | Endpoint | Mô tả |
 |--------|----------|--------|
 | POST | `/ask/stream` | Core RAG streaming |
-| POST | `/conversations/generate-title`| Sinh tựa đề cho Conversation |
-| DELETE | `/conversations/{id}/checkpoints` | Xóa bộ nhớ | 
+| POST | `/conversations/generate-title` | Sinh tựa đề hội thoại |
+| DELETE | `/conversations/{id}/checkpoints` | Xóa bộ nhớ checkpoint |
 
----
-
-## Luồng hoạt động nổi bật
-
-### Hỏi đáp có Streaming
-1. Client gọi RESTful `/chat/ask/stream`.
-2. NestJS Auth + Rate Lmit chặn / pass, sau đó lưu tin nhắn user.
-3. NestJS gọi Stream xuống AI Service FastAPI.
-4. AI đánh giá (Router) -> Xử lý chuỗi (Legal/Natural) -> Tools (Search) -> Reflector.
-5. FastAPI trả chuỗi NDJSON (type: thought, answer, metadata).
-6. NestJS Proxy lại thành Server-Sent Events về cho Frontend.
-7. Khi "done", NestJS lưu tin nhắn bot và thông tin metadata (Web urls).
-8. NestJS kích hoạt **Event** sinh tiêu đề nếu là tin nhắn đầu.
+**Chuẩn response API:**
+```json
+{
+  "statusCode": 200,
+  "message": "Thành công!",
+  "data": { ... }
+}
+```
 
 ---
 
 ## Hướng dẫn cài đặt & chạy
-Sử dụng script `dev.ps1` ở thư mục root để start cả 2 services cùng một lúc.
+
+### Yêu cầu
+
+- Node.js >= 18
+- Python >= 3.11
+- Docker (để chạy Neo4j, PostgreSQL, Redis)
+
+### 1. Clone repository
+
+```bash
+git clone https://github.com/your-username/lexmind.git
+cd lexmind
+```
+
+### 2. Cài đặt dependencies
+
+```bash
+# Root (concurrently)
+npm install
+
+# Backend-Core
+cd backend-core && npm install
+
+# AI Service
+cd ../ai-service && pip install -r requirements.txt
+```
+
+### 3. Cấu hình biến môi trường
+
+Tạo file `.env` theo mẫu ở mục [Biến môi trường](#biến-môi-trường) cho cả 2 service.
+
+### 4. Khởi động services
+
 ```powershell
+# Windows
 .\dev.ps1
 ```
-Hoặc `npm run dev` thông qua root `package.json` trên nền tảng khác.
+
+```bash
+# Linux / macOS
+npm run dev
+```
+
+Sau khi khởi động:
+- Backend API: `http://localhost:8080/api/v1`
+- AI Service: `http://localhost:8001`
+
+---
+
+## Đóng góp
+
+Mọi đóng góp đều được hoan nghênh! Để đóng góp:
+
+1. Fork repository này
+2. Tạo branch mới: `git checkout -b feature/ten-tinh-nang`
+3. Commit thay đổi: `git commit -m 'feat: mô tả ngắn gọn'`
+4. Push lên branch: `git push origin feature/ten-tinh-nang`
+5. Mở Pull Request
+
+Vui lòng đảm bảo code đã được test trước khi tạo PR.
+
+---
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © 2026 LexMind Team

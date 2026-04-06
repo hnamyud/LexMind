@@ -1,28 +1,28 @@
-# Backend Core - NestJS API Gateway 🚀
+# Backend Core - NestJS API Gateway 
 
 Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authentication**, **authorization**, **conversation management**, và **streaming proxy** tới AI Service.
 
 ## 📑 Mục lục
 
-- [✨ Tính năng chính](#-tính-năng-chính)
-- [🏗️ Kiến trúc tổng quan](#️-kiến-trúc-tổng-quan)
-- [🛠️ Tech Stack](#️-tech-stack)
-- [📂 Cấu trúc thư mục](#-cấu-trúc-thư-mục)
-- [🔐 Authentication & Authorization](#-authentication--authorization)
-- [💬 Chat & Streaming](#-chat--streaming)
-- [📊 Database Schema](#-database-schema)
-- [🔄 Event-Driven Architecture](#-event-driven-architecture)
-- [🚦 Rate Limiting](#-rate-limiting)
-- [🚀 API Endpoints](#-api-endpoints)
-- [⚙️ Configuration](#️-configuration)
-- [🧪 Testing](#-testing)
-- [🔧 Troubleshooting](#-troubleshooting)
+- [Tính năng chính](#-tính-năng-chính)
+- [Kiến trúc tổng quan](#️-kiến-trúc-tổng-quan)
+- [Tech Stack](#️-tech-stack)
+- [Cấu trúc thư mục](#-cấu-trúc-thư-mục)
+- [Authentication & Authorization](#-authentication--authorization)
+- [Chat & Streaming](#-chat--streaming)
+- [Database Schema](#-database-schema)
+- [Event-Driven Architecture](#-event-driven-architecture)
+- [Rate Limiting](#-rate-limiting)
+- [API Endpoints](#-api-endpoints)
+- [Configuration](#️-configuration)
+- [Testing](#-testing)
+- [Troubleshooting](#-troubleshooting)
 
 ---
 
-## ✨ Tính năng chính
+## Tính năng chính
 
-### 🔐 Authentication & Authorization
+### Authentication & Authorization
 
 - **JWT Authentication**: Access token + Refresh token
 - **Google OAuth 2.0**: Social login
@@ -30,7 +30,7 @@ Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authe
 - **CASL Authorization**: Policy-based access control
 - **Password Hashing**: bcryptjs with salt rounds
 
-### 💬 Conversation Management
+### Conversation Management
 
 - **CRUD Operations**: Create, Read, Update, Delete conversations
 - **Soft Delete**: Conversations can be restored
@@ -38,14 +38,14 @@ Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authe
 - **Message History**: Full conversation context
 - **Feedback System**: Like/dislike with optional reason
 
-### 🔄 Event-Driven Architecture
+### Event-Driven Architecture
 
 - **Event Emitter**: `@nestjs/event-emitter` for async tasks
 - **Fire-and-Forget**: Non-blocking background jobs
 - **Title Generation**: Auto-generate conversation titles
 - **Extensible**: Easy to add new event listeners
 
-### 🚦 Security & Performance
+### Security & Performance
 
 - **Rate Limiting**: Multi-tier throttling (short/medium/long)
 - **Helmet**: Security headers
@@ -54,7 +54,7 @@ Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authe
 - **Caching**: Redis for sessions and rate limits
 - **Streaming**: Server-Sent Events (SSE) for real-time responses
 
-### 📊 Metrics & Analytics
+### Metrics & Analytics
 
 - **AI Metrics**: Token usage, latency, cost per message
 - **User Feedback**: Track satisfaction rates
@@ -62,7 +62,7 @@ Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authe
 
 ---
 
-## 🏗️ Kiến trúc tổng quan
+## Kiến trúc tổng quan
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
@@ -156,7 +156,7 @@ Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authe
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Component | Technology | Version | Purpose |
 |-----------|-----------|---------|---------|
@@ -179,7 +179,7 @@ Backend Core là API Gateway của hệ thống Chatbot Luật, xử lý **authe
 
 ---
 
-## 📂 Cấu trúc thư mục
+## Cấu trúc thư mục
 
 ```text
 backend-core/
@@ -311,7 +311,7 @@ backend-core/
 
 ---
 
-## 🔐 Authentication & Authorization
+## Authentication & Authorization
 
 ### JWT Strategy
 
@@ -451,7 +451,7 @@ async changePassword(userId: string, oldPassword: string, newPassword: string) {
 
 ---
 
-## 💬 Chat & Streaming
+## Chat & Streaming
 
 ### Streaming Proxy (NDJSON → SSE)
 
@@ -555,7 +555,7 @@ data: {"type":"done"}
 
 ---
 
-## 📊 Database Schema
+## Database Schema
 
 ### Prisma Schema
 
@@ -695,7 +695,7 @@ npx prisma studio
 
 ---
 
-## 🔄 Event-Driven Architecture
+## Event-Driven Architecture
 
 ### Event Definition
 
@@ -785,7 +785,7 @@ export class TitleGeneratorService {
 
 ---
 
-## 🚦 Rate Limiting
+## Rate Limiting
 
 ### Configuration
 
@@ -867,7 +867,7 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
 
 ---
 
-## 🚀 API Endpoints
+## API Endpoints
 
 ### Base URL: `http://localhost:8080/api/v1`
 
@@ -912,7 +912,7 @@ curl -X POST http://localhost:8080/api/v1/auth/register \
 }
 ```
 
-### 💬 Chat (`/chat`)
+### Chat (`/chat`)
 
 | Method | Endpoint | Description | Auth | Rate Limit |
 |--------|----------|-------------|------|------------|
@@ -942,7 +942,7 @@ data: {"type":"metadata","sources":[...]}
 data: {"type":"done"}
 ```
 
-### 💬 Conversations (`/conversations`)
+### Conversations (`/conversations`)
 
 | Method | Endpoint | Description | Auth | Policy |
 |--------|----------|-------------|------|--------|
@@ -984,7 +984,7 @@ curl -X GET "http://localhost:8080/api/v1/conversations?page=1&limit=20" \
 }
 ```
 
-### 📨 Messages (`/messages`)
+### Messages (`/messages`)
 
 | Method | Endpoint | Description | Auth | Policy |
 |--------|----------|-------------|------|--------|
@@ -998,7 +998,7 @@ curl -X GET "http://localhost:8080/api/v1/messages?conversationId=uuid" \
   -H "Authorization: Bearer YOUR_JWT_TOKEN"
 ```
 
-### 👍 Feedbacks (`/feedbacks`)
+### Feedbacks (`/feedbacks`)
 
 | Method | Endpoint | Description | Auth |
 |--------|----------|-------------|------|
@@ -1016,7 +1016,7 @@ curl -X POST http://localhost:8080/api/v1/feedbacks/message-uuid \
   }'
 ```
 
-### 👥 Users (`/users`)
+### Users (`/users`)
 
 | Method | Endpoint | Description | Auth | Policy |
 |--------|----------|-------------|------|--------|
@@ -1024,7 +1024,7 @@ curl -X POST http://localhost:8080/api/v1/feedbacks/message-uuid \
 | PUT | `/me` | Update profile | JWT | Own profile |
 | DELETE | `/me` | Delete account (soft) | JWT | Own account |
 
-### 🛡️ Admin (`/admin`)
+### Admin (`/admin`)
 
 | Method | Endpoint | Description | Auth | Policy |
 |--------|----------|-------------|------|--------|
@@ -1034,7 +1034,7 @@ curl -X POST http://localhost:8080/api/v1/feedbacks/message-uuid \
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -1102,7 +1102,7 @@ export class SomeService {
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Unit Tests
 
@@ -1210,7 +1210,7 @@ describe('ChatController (e2e)', () => {
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Prisma Connection Issues
 
@@ -1286,7 +1286,7 @@ app.enableCors({
 
 ---
 
-## 📈 Performance Tips
+## Performance Tips
 
 ### Database Optimization
 
@@ -1336,7 +1336,7 @@ const conversation = await this.prisma.conversation.findUnique({
 
 ---
 
-## 📚 Best Practices
+## Best Practices
 
 1. **Always use DTOs** with class-validator
 2. **Implement error handling** với exception filters
@@ -1351,7 +1351,7 @@ const conversation = await this.prisma.conversation.findUnique({
 
 ---
 
-## 🔗 Related Documentation
+## Related Documentation
 
 - [Main README](../README.md)
 - [AI Service Documentation](../ai-service/README.md)
@@ -1360,6 +1360,3 @@ const conversation = await this.prisma.conversation.findUnique({
 - [CASL Authorization](https://casl.js.org/v6/en/)
 
 ---
-
-**Cập nhật:** 2024-04-02  
-**Tác giả:** Backend Team
