@@ -1,4 +1,4 @@
-# LexMind — Chatbot Tư Vấn Luật Giao Thông Việt Nam 🇻🇳
+# LexMind — Chatbot Tư Vấn Luật Giao Thông Việt Nam
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
@@ -68,7 +68,7 @@ Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều đi�
 │  • Messages & Feedbacks       │  │  • Web Search (Serper)       │
 │  • User management            │  │  • Firecrawl Web Scraping    │
 │  • Event-driven Background    │  │  • PostgreSQL Checkpointer   │
-│  • Rate Limiting              │  │  • Gemini 2.5 Flash LLM      │
+│  • Rate Limiting              │  │  • Gemini 3.0 Flash LLM      │
 └───────────────┬───────────────┘  └──────────────┬───────────────┘
                 │                                  │
        ┌────────┴────────┐                ┌────────┴────────┐
@@ -103,7 +103,7 @@ Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều đi�
 | LLM Orchestration | LangGraph | 1.0.9 |
 | LLM Model | Google Gemini (3.0 Flash, 3.1 Flash Lite) | Latest |
 | Knowledge Graph | Neo4j | 5.28.1 |
-| Embeddings | SentenceTransformers (vietnamese-sbert) | 4.1.0 |
+| Embeddings | [DEk21_hcmute_embedding](https://huggingface.co/huyydangg/DEk21_hcmute_embedding) | 4.1.0 |
 | Web Search | Serper.dev + Firecrawl | Via SDK |
 | State Management | LangGraph AsyncPostgresSaver | 4.0.0 |
 | Security | Helmet, bcryptjs | 8.1.0 / 2.4.3 |
