@@ -8,10 +8,8 @@ from typing import Optional, List
 import yaml
 from fastapi import HTTPException
 from neo4j import AsyncGraphDatabase, exceptions
-import neo4j
 from sentence_transformers import SentenceTransformer
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, AIMessageChunk
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, END
@@ -99,7 +97,6 @@ class RAGService:
         self._llm_router_model = settings.LLM_ROUTER
         self._llm_generator_model = settings.LLM_GENERATOR
         self._llm_reflector_model = settings.LLM_REFLECTOR
-        self._api_key_vertex = settings.VERTEX_AI_API_KEY
         self._api_key_serper = settings.SERPER_API_KEY
         self._api_key_firecrawl = settings.FIRECRAWL_API_KEY
         self._embed_model_id = settings.EMBED_MODEL_ID
@@ -124,6 +121,7 @@ class RAGService:
         self._graph = None
         self._tools: Optional[List[BaseTool]] = None
         self._system_prompt: str = _load_prompt("synthesis.yaml")
+        self._system_prompt_compact: str = _load_prompt("synthesis_compact.yaml")
         self._natural_prompt: str = _load_prompt("synthesis_natural.yaml")
         self._router_rewrite_prompt: str = _load_prompt("router_rewrite.yaml")
         self._reflector_prompt: str = _load_prompt("reflector.yaml")
@@ -226,8 +224,7 @@ class RAGService:
                 model=self._llm_reflector_model,
                 google_api_key=self._api_key,
                 temperature=0,
-                thinking_level="low",
-                # thinking_budget=512,               
+                thinking_level="low",              
             )
             # Level 3: 
             self._llm_ref_l3 = ChatGoogleGenerativeAI(
@@ -235,7 +232,6 @@ class RAGService:
                 google_api_key=self._api_key,
                 temperature=0,
                 thinking_level="medium",
-                # thinking_budget=1024,
             )
 
             # Alias _llm → _llm_gen_l2 (backward-compat cho agent_direct)
@@ -758,8 +754,15 @@ class RAGService:
         # 2. Giữ 8 tin nhắn lịch sử gần nhất (4 lượt chat)
         recent_chat_msgs = chat_msgs[-8:]
 
-        # 3. Chọn system prompt theo response_style
-        chosen_prompt = self._system_prompt if style == "legal" else self._natural_prompt
+        # 3. Chọn system prompt theo response_style + độ phức tạp
+        # level 1 + single violation => dùng prompt rút gọn để trả lời nhanh cho 1 hành vi
+        is_single_violation = len(state.get("sub_queries", [])) == 0
+        if style == "legal" and complexity_level == 1 and is_single_violation:
+            chosen_prompt = self._system_prompt_compact
+        elif style == "legal":
+            chosen_prompt = self._system_prompt
+        else:
+            chosen_prompt = self._natural_prompt
 
         # 4. Ghép lại danh sách messages cho LLM
         messages_to_llm = system_msgs + recent_chat_msgs

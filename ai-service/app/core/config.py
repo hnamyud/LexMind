@@ -15,7 +15,6 @@ class Settings:
     LLM_ROUTER: str = os.getenv("LLM_ROUTER", "gemini-3.1-flash-lite-preview")
     LLM_GENERATOR: str = os.getenv("LLM_GENERATOR", "gemini-3-flash-preview")
     LLM_REFLECTOR: str = os.getenv("LLM_REFLECTOR", "gemini-3-flash-preview")
-    VERTEX_AI_API_KEY: str = os.getenv("VERTEX_AI_API_KEY", "")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
     EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID")
