@@ -43,7 +43,8 @@ def _load_skill(filename: str) -> str:
 # ---------------------------------------------------------------------------
 
 _NODE_STEPS: dict = {
-    "router_rewrite":      {"step": 1, "label": "🔍 Đang phân tích câu hỏi..."},
+    "router":              {"step": 1, "label": "🔍 Đang phân loại câu hỏi..."},
+    "rewrite":             {"step": 1, "label": "✍️ Đang chuẩn hóa thuật ngữ pháp lý..."},
     "cache_check":         {"step": 1, "label": "⚡ Đang kiểm tra cache..."},
     "retriever":           {"step": 2, "label": "📚 Đang tra cứu đồ thị luật..."},
     "reflector":           {"step": 3, "label": "🔎 Đang kiểm tra tính đầy đủ..."},
@@ -123,7 +124,8 @@ class RAGService:
         self._system_prompt: str = _load_prompt("synthesis.yaml")
         self._system_prompt_compact: str = _load_prompt("synthesis_compact.yaml")
         self._natural_prompt: str = _load_prompt("synthesis_natural.yaml")
-        self._router_rewrite_prompt: str = _load_prompt("router_rewrite.yaml")
+        self._router_classify_prompt: str = _load_prompt("router_classify.yaml")
+        self._rewrite_prompt: str = _load_prompt("rewrite.yaml")
         self._reflector_prompt: str = _load_prompt("reflector.yaml")
 
         # Agent skills — chỉ load những skill có giá trị bổ sung so với prompts hiện có
@@ -234,8 +236,8 @@ class RAGService:
                 thinking_level="medium",
             )
 
-            # Alias _llm → _llm_gen_l2 (backward-compat cho agent_direct)
-            self._llm = self._llm_gen_l2
+            # Alias _llm → _llm_gen_l1 (backward-compat cho agent_direct)
+            self._llm = self._llm_gen_l1
 
             logging.info(
                 "✅ Kết nối Gemini API thành công! "
@@ -257,18 +259,18 @@ class RAGService:
             self._embed_model = None
 
     # ------------------------------------------------------------------
-    # Step 1 — Router + Extractor
+    # Step 1a — Router (phân loại nhanh, không rewrite)
     # ------------------------------------------------------------------
 
-    async def _node_router_rewrite(self, state: RAGState, config: dict = None) -> dict:
+    async def _node_router(self, state: RAGState, config: dict = None) -> dict:
         """
-        Step 1: Phân loại câu hỏi (route) + chuẩn hóa thuật ngữ (legal_query)
-        + bóc tách entities + phân tách đa vi phạm (sub_queries) — tất cả trong 1 lần gọi LLM.
+        Step 1a: Phân loại câu hỏi vào 3 nhóm:
+          - use_tool       → câu hỏi luật giao thông → đi _node_rewrite
+          - direct_answer  → chào hỏi, hỏi về chatbot → đi thẳng agent_direct
+          - out_of_domain  → ngoài phạm vi → đi agent_reject
 
-        NOTE: LangGraph truyền `config` vào các *node* (không phải routing function).
-        Nên ta đọc enable_web_search tại đây và lưu vào state để routing function đọc sau.
+        Dùng _llm_router và prompt cức cục ngắn — không rewrite, không extract entities.
         """
-        # Đọc enable_web_search từ config (LangGraph truyền vào node, không phải routing fn)
         enable_web_search = True
         enable_cache = True
         if config and "configurable" in config:
@@ -278,14 +280,18 @@ class RAGService:
         logging.info(f"[STEP1] enable_cache={enable_cache}")
 
         messages = list(state.get("messages", []))
-
         chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
-        recent_msgs = chat_msgs[-5:]  # Lấy 5 tin nhắn gần đây nhất (cả Hỏi và Đáp) làm ngữ cảnh
+        # Chỉ lấy 4 messages gần nhất — router chỉ cần đủ ngữ cảnh phân loại
+        recent_msgs = chat_msgs[-4:]
 
         if not recent_msgs:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search, "enable_cache": enable_cache}
+            return {
+                "route": "direct_answer",
+                "response_style": "natural",
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
+            }
 
-        # Lấy câu hỏi cuối cùng của user
         last_question = ""
         for m in reversed(recent_msgs):
             if isinstance(m, HumanMessage):
@@ -293,14 +299,25 @@ class RAGService:
                 break
 
         if not last_question:
-            return {"route": "direct_answer", "legal_query": "", "entities": {}, "response_style": "natural", "sub_queries": [], "enable_web_search": enable_web_search, "enable_cache": enable_cache}
+            return {
+                "route": "direct_answer",
+                "response_style": "natural",
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
+            }
 
-        # Định dạng ngữ cảnh từ lịch sử gần nhất để Router hiểu ý câu hỏi nối tiếp
-        history_text = "\n".join([f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content}" for m in recent_msgs])
+        # Truncate AI responses dài để giữ prompt nhỏ
+        def _fmt_msg(m) -> str:
+            role = "User" if isinstance(m, HumanMessage) else "AI"
+            text = m.content if isinstance(m.content, str) else str(m.content)
+            if isinstance(m, AIMessage) and len(text) > 300:
+                text = text[:300] + "...[rút gọn]"
+            return f"{role}: {text}"
 
+        history_text = "\n".join([_fmt_msg(m) for m in recent_msgs])
         question = f"--- Lịch sử chat gần đây ---\n{history_text}\n--- Câu hỏi hiện tại ---\nUser: {last_question}"
 
-        prompt = self._router_rewrite_prompt.format(question=question)
+        prompt = self._router_classify_prompt.format(question=question)
         try:
             response = await self._llm_router.ainvoke([HumanMessage(content=prompt)])
             raw = _extract_ai_text(response).strip()
@@ -308,16 +325,88 @@ class RAGService:
             raw = re.sub(r'\s*```$', '', raw.strip())
             data = json.loads(raw)
             route = data.get("route", "use_tool")
+            response_style = "legal" if route == "use_tool" else "natural"
+
+            logging.info(f"[STEP1a] route={route!r}, style={response_style!r}")
+            return {
+                "route": route,
+                "response_style": response_style,
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
+                # Reset các field rewrite để tránh sót state cũ
+                "legal_query": "",
+                "entities": {},
+                "sub_queries": [],
+                "complexity_level": 1,
+            }
+        except Exception as e:
+            logging.error(f"[STEP1a] Lỗi: {e} — fallback use_tool")
+            return {
+                "route": "use_tool",
+                "response_style": "legal",
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
+                "legal_query": "",
+                "entities": {},
+                "sub_queries": [],
+                "complexity_level": 2,
+            }
+
+    # ------------------------------------------------------------------
+    # Step 1b — Rewrite (chỉ cho câu hỏi pháp lý)
+    # ------------------------------------------------------------------
+
+    async def _node_rewrite(self, state: RAGState) -> dict:
+        """
+        Step 1b: Chuẩn hóa thuật ngữ + bóc tách entities + phân tách đa vi phạm + đánh giá complexity.
+        Chỉ được gọi khi route == "use_tool" (router đã xác nhận là câu hỏi pháp lý).
+        """
+        messages = list(state.get("messages", []))
+        enable_web_search = state.get("enable_web_search", True)
+        enable_cache = state.get("enable_cache", True)
+
+        chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
+        recent_msgs = chat_msgs[-4:]
+
+        last_question = ""
+        for m in reversed(recent_msgs):
+            if isinstance(m, HumanMessage):
+                last_question = m.content if isinstance(m.content, str) else str(m.content)
+                break
+
+        if not last_question:
+            return {
+                "legal_query": "",
+                "entities": {},
+                "sub_queries": [],
+                "complexity_level": 2,
+            }
+
+        def _fmt_msg(m) -> str:
+            role = "User" if isinstance(m, HumanMessage) else "AI"
+            text = m.content if isinstance(m.content, str) else str(m.content)
+            if isinstance(m, AIMessage) and len(text) > 300:
+                text = text[:300] + "...[rút gọn]"
+            return f"{role}: {text}"
+
+        history_text = "\n".join([_fmt_msg(m) for m in recent_msgs])
+        question = f"--- Lịch sử chat gần đây ---\n{history_text}\n--- Câu hỏi hiện tại ---\nUser: {last_question}"
+
+        prompt = self._rewrite_prompt.format(question=question)
+        try:
+            response = await self._llm_router.ainvoke([HumanMessage(content=prompt)])
+            raw = _extract_ai_text(response).strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw.strip())
+            data = json.loads(raw)
+
             legal_query = data.get("legal_query", "")
             entities = data.get("entities", {})
 
-            # ── Gắn tag response_style dựa trên route ──────────────────
-            response_style = "legal" if route == "use_tool" else "natural"
-
-            # ── Parse & validate sub_queries (multi-violation) ──────────
+            # Parse & validate sub_queries
             sub_queries = data.get("sub_queries", [])
             validated_subs = []
-            for sq in sub_queries[:3]:  # Cap tối đa 3 sub-queries
+            for sq in sub_queries[:3]:
                 if isinstance(sq, dict) and sq.get("legal_query"):
                     validated_subs.append({
                         "legal_query": sq["legal_query"],
@@ -325,38 +414,37 @@ class RAGService:
                         "label": sq.get("label", sq["legal_query"][:30]),
                     })
 
-            # ── Parse + validate complexity_level ──────────────────────────
+            # Parse + validate complexity_level
             raw_level = data.get("complexity_level", 2)
             try:
                 complexity_level = max(1, min(3, int(raw_level)))
             except (TypeError, ValueError):
                 complexity_level = 2
 
-            # Auto-upgrade: nhiều sub_queries → luôn là level 3
+            # Auto-upgrade dựa trên số sub_queries
             if len(validated_subs) >= 2 and complexity_level < 3:
                 complexity_level = 3
-            # Auto-upgrade: 1 sub_query → tối thiểu level 2
             elif len(validated_subs) == 1 and complexity_level < 2:
                 complexity_level = 2
 
             logging.info(
-                f"[STEP1] route={route!r}, style={response_style!r}, "
-                f"legal_query={legal_query!r}, sub_queries={len(validated_subs)}, "
+                f"[STEP1b] legal_query={legal_query!r}, sub_queries={len(validated_subs)}, "
                 f"complexity_level={complexity_level}"
             )
             return {
-                "route": route,
                 "legal_query": legal_query,
                 "entities": entities,
-                "response_style": response_style,
                 "sub_queries": validated_subs,
                 "complexity_level": complexity_level,
-                "enable_web_search": enable_web_search,  # lưu vào state để routing fn đọc
-                "enable_cache": enable_cache,
             }
         except Exception as e:
-            logging.error(f"[STEP1] Lỗi: {e} — fallback use_tool")
-            return {"route": "use_tool", "legal_query": question, "entities": {}, "response_style": "legal", "sub_queries": [], "complexity_level": 2, "enable_web_search": enable_web_search, "enable_cache": enable_cache}
+            logging.error(f"[STEP1b] Lỗi: {e} — fallback")
+            return {
+                "legal_query": last_question,
+                "entities": {},
+                "sub_queries": [],
+                "complexity_level": 2,
+            }
 
     # ------------------------------------------------------------------
     # Step 2 — Retriever (parallel multi-violation via asyncio.gather)
@@ -727,15 +815,15 @@ class RAGService:
           - "natural"  → trả lời như một người bạn thân thiện
 
         Complexity-aware (thinking_budget):
-          - Level 1 (Simple):  thinking_budget=0  (tắt thinking)
-          - Level 2 (Medium):  thinking_budget=2048
-          - Level 3 (Complex): thinking_budget=4096
+          - Level 1 (Simple):  thinking_level=low  (tắt thinking)
+          - Level 2 (Medium):  thinking_level=medium
+          - Level 3 (Complex): thinking_level=high
         """
         complexity_level = state.get("complexity_level", 2)
         _llm_gen_map = {
-            1: self._llm_gen_l1,  # thinking_budget=0
-            2: self._llm_gen_l2,  # thinking_budget=2048
-            3: self._llm_gen_l3,  # thinking_budget=4096
+            1: self._llm_gen_l1,  # thinking_level=low
+            2: self._llm_gen_l2,  # thinking_level=medium
+            3: self._llm_gen_l3,  # thinking_level=high
         }
         llm = _llm_gen_map.get(complexity_level, self._llm_gen_l2)
         logging.info(
@@ -815,9 +903,12 @@ class RAGService:
         """
         Trả lời trực tiếp cho câu hỏi direct_answer (chào hỏi, hỏi về chatbot, v.v.)
         Luôn dùng style "natural" — giọng văn thân thiện.
+
+        Dùng _llm_router (nhẹ, không thinking, không streaming overhead) — nhanh hơn
+        _llm_gen_l1 cho câu hỏi cơ bản không cần suy luận pháp lý.
         """
         messages = list(state.get("messages", []))
-        
+
         system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
         chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
         recent_chat_msgs = chat_msgs[-8:]
@@ -829,7 +920,8 @@ class RAGService:
             messages_to_llm = [SystemMessage(content=self._natural_prompt)] + messages_to_llm
 
         try:
-            response = await self._llm.ainvoke(messages_to_llm)
+            # Dùng _llm_router: nhẹ, không thinking, phản hồi nhanh cho câu hỏi cơ bản
+            response = await self._llm_router.ainvoke(messages_to_llm)
             return {"messages": [response]}
         except Exception as e:
             logging.error(f"[DIRECT] Lỗi: {e}")
@@ -925,13 +1017,13 @@ class RAGService:
 
     @staticmethod
     def _route_after_router(state: RAGState) -> str:
-        """Step 1 → cache_check (cho use_tool), direct answer, hoặc reject."""
+        """Step 1a → rewrite (legal), direct_answer, hoặc reject."""
         route = state.get("route")
         if route == "direct_answer":
             return "agent_direct"
         if route == "out_of_domain":
             return "agent_reject"
-        return "cache_check"  # use_tool → kiểm tra cache trước
+        return "rewrite"  # use_tool → bước rewrite
 
     @staticmethod
     def _route_after_cache(state: RAGState) -> str:
@@ -951,11 +1043,9 @@ class RAGService:
           not_found               → web_search_fallback → generator
 
         NOTE: LangGraph KHÔNG truyền `config` vào routing function của add_conditional_edges.
-        enable_web_search được lưu vào state bởi _node_router_rewrite rồi đọc tại đây.
+        enable_web_search được lưu vào state bởi _node_router rồi đọc tại đây.
         """
-        # Đọc từ state (không đọc từ config — routing fn không nhận được config)
         enable_web_search = state.get("enable_web_search", True)
-
         verdict = state.get("reflection", "sufficient")
         trigger_search = state.get("trigger_search", False)
 
@@ -968,12 +1058,9 @@ class RAGService:
                 return "clarifier"
             return "generator"
 
-        # ── Ưu tiên 1: Force search (threshold hoặc reflector detection) ─────
+        # ── Ưu tiên 1: Force search ──────────────────────────────────────────
         if trigger_search:
-            logging.info(
-                "[ROUTING] trigger_search=True → chuyển sang web_search_fallback "
-                "(Graph data không đủ tin cậy hoặc không khớp)"
-            )
+            logging.info("[ROUTING] trigger_search=True → web_search_fallback")
             return "web_search_fallback"
 
         # ── Ưu tiên 2: Verdict routing ──────────────────────────────────────
@@ -989,65 +1076,38 @@ class RAGService:
 
     def _build_graph(self):
         """
-        Pipeline 5 bước (có Semantic Cache):
-
-             [START]
-                │
-          [router_rewrite]          ← Step 1: Phân loại + Bóc tách entities + Sub-queries
-                │
-         ┌──────┴──────────────┬────────────────┐
-         │                     │                │
-   direct_answer?          use_tool?      out_of_domain?
-         │                     │                │
-   [agent_direct]        [cache_check]    [agent_reject]
-         │                     │                │
-        END           ┌───────┴───────┐        END
-                      │               │
-                   cache_hit?     cache_miss?
-                      │               │
-              [generator_cached]  [retriever]
-                      │               │
-                     END         [reflector]
-                                      │
-                     ┌────────────────┼────────────────┐
-                     │                │                │
-               sufficient?  needs_clarification?  not_found?
-                     │                │                │
-                [generator]      [clarifier]   [web_search_fallback]
-                     │                │                │
-                    END              END          [generator]
-                                                       │
-                                                      END
-
-        Multi-violation: retriever node chạy song song qua asyncio.gather
+                                                │
+                                               END
         """
         graph = StateGraph(RAGState)
 
         # Nodes
-        graph.add_node("router_rewrite",      self._node_router_rewrite)
-        graph.add_node("cache_check",         self._node_cache_check)
-        graph.add_node("generator_cached",    self._node_generator_cached)
-        graph.add_node("agent_direct",        self._node_agent_direct)
-        graph.add_node("agent_reject",        self._node_agent_reject)
-        graph.add_node("retriever",           self._node_retriever)
-        graph.add_node("reflector",           self._node_reflector)
-        graph.add_node("clarifier",           self._node_clarifier)
-        graph.add_node("web_search_fallback", self._node_web_search_fallback)
-        graph.add_node("generator",           self._node_generator)
+        graph.add_node("router",             self._node_router)
+        graph.add_node("rewrite",            self._node_rewrite)
+        graph.add_node("cache_check",        self._node_cache_check)
+        graph.add_node("generator_cached",   self._node_generator_cached)
+        graph.add_node("agent_direct",       self._node_agent_direct)
+        graph.add_node("agent_reject",       self._node_agent_reject)
+        graph.add_node("retriever",          self._node_retriever)
+        graph.add_node("reflector",          self._node_reflector)
+        graph.add_node("clarifier",          self._node_clarifier)
+        graph.add_node("web_search_fallback",self._node_web_search_fallback)
+        graph.add_node("generator",          self._node_generator)
 
         # Edges
-        graph.set_entry_point("router_rewrite")
+        graph.set_entry_point("router")
         graph.add_conditional_edges(
-            "router_rewrite",
+            "router",
             self._route_after_router,
             {
                 "agent_direct": "agent_direct",
-                "cache_check":  "cache_check",
+                "rewrite":      "rewrite",
                 "agent_reject": "agent_reject",
             },
         )
         graph.add_edge("agent_direct", END)
         graph.add_edge("agent_reject", END)
+        graph.add_edge("rewrite", "cache_check")
         graph.add_conditional_edges(
             "cache_check",
             self._route_after_cache,
@@ -1062,8 +1122,8 @@ class RAGService:
             "reflector",
             self._route_after_reflector,
             {
-                "generator":          "generator",
-                "clarifier":          "clarifier",
+                "generator":           "generator",
+                "clarifier":           "clarifier",
                 "web_search_fallback": "web_search_fallback",
             },
         )
@@ -1074,10 +1134,12 @@ class RAGService:
         compiled = graph.compile(checkpointer=self._checkpointer)
         cache_status = "có cache" if self._cache and self._cache.is_connected else "không cache"
         if self._checkpointer:
-            logging.info(f"✅ LangGraph compiled ({cache_status}) — Pipeline: Router→Cache→Retriever→Reflector→Generator.")
+            logging.info(f"✅ LangGraph compiled ({cache_status}) — Pipeline: Router→Rewrite→Cache→Retriever→Reflector→Generator.")
         else:
-            logging.warning(f"⚠️  LangGraph compiled (stateless, {cache_status}) — Pipeline: Router→Cache→Retriever→Reflector→Generator.")
+            logging.warning(f"⚠️  LangGraph compiled (stateless, {cache_status}) — Pipeline: Router→Rewrite→Cache→Retriever→Reflector→Generator.")
         return compiled
+
+
 
     # ------------------------------------------------------------------
     # Source extraction helpers
@@ -1297,8 +1359,10 @@ class RAGService:
                     current_node = evt_name
                     current_node_start = time.time()
 
-                    if evt_name == "router_rewrite":
-                        yield json.dumps({"type": "process", "content": "Phân tích và phân loại câu hỏi..."}, ensure_ascii=False) + "\n"
+                    if evt_name == "router":
+                        yield json.dumps({"type": "process", "content": "Phân loại câu hỏi..."}, ensure_ascii=False) + "\n"
+                    elif evt_name == "rewrite":
+                        yield json.dumps({"type": "process", "content": "Chuẩn hóa thuật ngữ pháp lý..."}, ensure_ascii=False) + "\n"
                     elif evt_name == "retriever":
                         yield json.dumps({"type": "process", "content": "Đang tra cứu cơ sở dữ liệu pháp luật..."}, ensure_ascii=False) + "\n"
                     elif evt_name == "reflector":
@@ -1499,10 +1563,11 @@ class RAGService:
                                 if text:
                                     final_answer_text = text
 
-                    # ── Cache: track route/entities from router_rewrite ──────
+                    # ── Cache: track route/entities từ router + rewrite ───────
                     if isinstance(output, dict):
-                        if evt_name == "router_rewrite":
+                        if evt_name == "router":
                             final_route = output.get("route", "")
+                        elif evt_name == "rewrite":
                             final_entities = output.get("entities", {})
                             final_legal_query = output.get("legal_query", "")
                         elif evt_name == "cache_check":
@@ -1559,14 +1624,15 @@ class RAGService:
 
         # Breakdown chi tiết để xác định bottleneck theo node.
         node_breakdown = {
-            "routerRewriteTime": node_timings.get("router_rewrite"),
-            "cacheCheckTime": node_timings.get("cache_check"),
-            "retrievalTime": node_timings.get("retriever"),
-            "reflectorTime": node_timings.get("reflector"),
-            "generatorTime": node_timings.get("generator"),
+            "routerTime":        node_timings.get("router"),
+            "rewriteTime":       node_timings.get("rewrite"),
+            "cacheCheckTime":    node_timings.get("cache_check"),
+            "retrievalTime":     node_timings.get("retriever"),
+            "reflectorTime":     node_timings.get("reflector"),
+            "generatorTime":     node_timings.get("generator"),
             "generatorCachedTime": node_timings.get("generator_cached"),
-            "clarifierTime": node_timings.get("clarifier"),
-            "webSearchTime": node_timings.get("web_search_fallback"),
+            "clarifierTime":     node_timings.get("clarifier"),
+            "webSearchTime":     node_timings.get("web_search_fallback"),
         }
 
         executed_breakdown = {
