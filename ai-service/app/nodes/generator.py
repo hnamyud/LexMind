@@ -45,8 +45,8 @@ async def _node_generator(self, state: dict) -> dict:
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
 
-    # 2. Giữ 8 tin nhắn lịch sử gần nhất (4 lượt chat)
-    recent_chat_msgs = chat_msgs[-8:]
+    # 2. Giữ 4 tin nhắn lịch sử gần nhất (2 lượt chat)
+    recent_chat_msgs = chat_msgs[-4:]
 
     # 3. Chọn system prompt theo response_style + độ phức tạp
     # level 1 + single violation => dùng prompt rút gọn để trả lời nhanh cho 1 hành vi

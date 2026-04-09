@@ -33,7 +33,7 @@ async def _node_agent_direct(self, state: dict) -> dict:
 
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
-    recent_chat_msgs = chat_msgs[-8:]
+    recent_chat_msgs = chat_msgs[-4:]
 
     messages_to_llm = system_msgs + recent_chat_msgs
 

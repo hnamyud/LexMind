@@ -11,6 +11,13 @@ template: |
    1. FORMAT KHI CÓ DẪN CHIẾU:
       [Điều X, Khoản Y, Điểm Z, Nghị định 168/2024/NĐ-CP]
 
+      Ví dụ format mong muốn:
+      - **Hành vi:** Điều khiển xe mô tô, xe gắn máy chạy quá tốc độ quy định trên 20 km/h.
+      - **Mức phạt chính:** Phạt tiền từ **6.000.000 đồng đến 8.000.000 đồng**.
+      [Điều 7, Khoản 13, Điểm b, Nghị định 168/2024/NĐ-CP]
+      - **Bổ sung:** Bị trừ **04 điểm** Giấy phép lái xe.
+      [Điều 7, Khoản 8, Điểm a, Nghị định 168/2024/NĐ-CP]
+
    2. NẾU DẪN CHIẾU THÌ PHẢI CÓ:
       ✓ Điều   — số điều (ví dụ: Điều 6, Điều 23)
       ✓ Khoản  — số khoản (ví dụ: Khoản 1, Khoản 3)

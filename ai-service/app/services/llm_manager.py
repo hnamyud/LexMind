@@ -94,14 +94,14 @@ def connect_llm(service) -> None:
             model=service._llm_reflector_model,
             google_api_key=service._api_key,
             temperature=0,
-            thinking_level="low",
+            # thinking_level="low",
         )
         # Level 3:
         service._llm_ref_l3 = ChatGoogleGenerativeAI(
             model=service._llm_reflector_model,
             google_api_key=service._api_key,
             temperature=0,
-            thinking_level="medium",
+            thinking_level="low",
         )
 
         # Alias _llm → _llm_gen_l1 (backward-compat cho agent_direct)
