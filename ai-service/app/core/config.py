@@ -13,6 +13,7 @@ class Settings:
     NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "")
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     LLM_ROUTER: str = os.getenv("LLM_ROUTER", "gemini-3.1-flash-lite-preview")
+    LLM_DIRECT: str = os.getenv("LLM_DIRECT", "gemini-3.1-flash-lite-preview")
     LLM_GENERATOR: str = os.getenv("LLM_GENERATOR", "gemini-3-flash-preview")
     LLM_REFLECTOR: str = os.getenv("LLM_REFLECTOR", "gemini-3-flash-preview")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")

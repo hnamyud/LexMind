@@ -12,7 +12,7 @@ from pydantic import BaseModel, field_validator
 from langchain_core.messages import HumanMessage as LCHumanMessage
 
 from app.core.config import settings
-from app.services.rag_service import _extract_ai_text
+from app.nodes.base import _extract_ai_text
 from app.eval.service import EvalService
 
 router = APIRouter()

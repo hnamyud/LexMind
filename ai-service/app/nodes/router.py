@@ -1,0 +1,133 @@
+"""
+nodes/router.py
+───────────────
+Step 1a — Router: phân loại nhanh câu hỏi vào 3 nhóm:
+  - use_tool       → câu hỏi pháp lý → đi _node_rewrite
+  - direct_answer  → chào hỏi, hỏi về chatbot → đi thẳng agent_direct
+  - out_of_domain  → ngoài phạm vi → đi agent_reject
+
+Option B: hàm nhận `self` (RAGService instance) làm tham số đầu tiên.
+RAGService sẽ bind: self._node_router = types.MethodType(_node_router, self)
+"""
+
+import asyncio
+import json
+import logging
+import re
+
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+from .base import _extract_ai_text
+
+
+async def _node_router(self, state: dict, config: dict = None) -> dict:
+    """
+    Step 1a: Phân loại câu hỏi vào 3 nhóm:
+      - use_tool       → câu hỏi luật giao thông → đi _node_rewrite
+      - direct_answer  → chào hỏi, hỏi về chatbot → đi thẳng agent_direct
+      - out_of_domain  → ngoài phạm vi → đi agent_reject
+
+    Dùng _llm_router và prompt cực ngắn — không rewrite, không extract entities.
+    """
+    enable_web_search = True
+    enable_cache = True
+    if config and "configurable" in config:
+        enable_web_search = config["configurable"].get("enable_web_search", True)
+        enable_cache = config["configurable"].get("enable_cache", True)
+    logging.info(f"[STEP1] enable_web_search={enable_web_search}")
+    logging.info(f"[STEP1] enable_cache={enable_cache}")
+
+    messages = list(state.get("messages", []))
+    chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
+    # Chỉ lấy 4 messages gần nhất — router chỉ cần đủ ngữ cảnh phân loại
+    recent_msgs = chat_msgs[-4:]
+
+    if not recent_msgs:
+        return {
+            "route": "direct_answer",
+            "response_style": "natural",
+            "enable_web_search": enable_web_search,
+            "enable_cache": enable_cache,
+        }
+
+    last_question = ""
+    for m in reversed(recent_msgs):
+        if isinstance(m, HumanMessage):
+            last_question = m.content if isinstance(m.content, str) else str(m.content)
+            break
+
+    if not last_question:
+        return {
+            "route": "direct_answer",
+            "response_style": "natural",
+            "enable_web_search": enable_web_search,
+            "enable_cache": enable_cache,
+        }
+
+    # Truncate AI responses dài để giữ prompt nhỏ
+    def _fmt_msg(m) -> str:
+        role = "User" if isinstance(m, HumanMessage) else "AI"
+        text = m.content if isinstance(m.content, str) else str(m.content)
+        if isinstance(m, AIMessage) and len(text) > 300:
+            text = text[:300] + "...[rút gọn]"
+        return f"{role}: {text}"
+
+    history_text = "\n".join([_fmt_msg(m) for m in recent_msgs])
+    question = f"--- Lịch sử chat gần đây ---\n{history_text}\n--- Câu hỏi hiện tại ---\nUser: {last_question}"
+
+    prompt = self._router_classify_prompt.format(question=question)
+
+    # Hard timeout: align với LLM timeout=25s + 5s buffer
+    # LLM timeout fires first với proper error → asyncio.TimeoutError là last resort
+    _ROUTER_TIMEOUT = 30.0
+
+    try:
+        response = await asyncio.wait_for(
+            self._llm_router.ainvoke([HumanMessage(content=prompt)]),
+            timeout=_ROUTER_TIMEOUT,
+        )
+        raw = _extract_ai_text(response).strip()
+        raw = re.sub(r'^```(?:json)?\s*', '', raw)
+        raw = re.sub(r'\s*```$', '', raw.strip())
+        data = json.loads(raw)
+        route = data.get("route", "use_tool")
+        response_style = "legal" if route == "use_tool" else "natural"
+
+        logging.info(f"[STEP1a] route={route!r}, style={response_style!r}")
+        return {
+            "route": route,
+            "response_style": response_style,
+            "enable_web_search": enable_web_search,
+            "enable_cache": enable_cache,
+            # Reset các field rewrite để tránh sót state cũ
+            "legal_query": "",
+            "entities": {},
+            "sub_queries": [],
+            "complexity_level": 1,
+        }
+    except asyncio.TimeoutError:
+        logging.warning(
+            f"[STEP1a] Router timeout sau {_ROUTER_TIMEOUT}s — fallback use_tool"
+        )
+        return {
+            "route": "use_tool",
+            "response_style": "legal",
+            "enable_web_search": enable_web_search,
+            "enable_cache": enable_cache,
+            "legal_query": "",
+            "entities": {},
+            "sub_queries": [],
+            "complexity_level": 2,
+        }
+    except Exception as e:
+        logging.error(f"[STEP1a] Lỗi: {e} — fallback use_tool")
+        return {
+            "route": "use_tool",
+            "response_style": "legal",
+            "enable_web_search": enable_web_search,
+            "enable_cache": enable_cache,
+            "legal_query": "",
+            "entities": {},
+            "sub_queries": [],
+            "complexity_level": 2,
+        }
