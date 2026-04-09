@@ -10,10 +10,11 @@ Option B: cả hai hàm nhận `self` (RAGService) làm tham số đầu tiên.
 
 import logging
 
+from langchain_core.runnables.config import RunnableConfig
 from langchain_core.messages import AIMessage
 
 
-async def _node_cache_check(self, state: dict, config: dict = None) -> dict:
+async def _node_cache_check(self, state: dict, config: RunnableConfig | None = None) -> dict:
     """
     Kiểm tra Semantic Cache sau khi rewrite đã bóc tách entities.
 

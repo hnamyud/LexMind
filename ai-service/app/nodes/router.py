@@ -15,12 +15,13 @@ import json
 import logging
 import re
 
+from langchain_core.runnables.config import RunnableConfig
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .base import _extract_ai_text
 
 
-async def _node_router(self, state: dict, config: dict = None) -> dict:
+async def _node_router(self, state: dict, config: RunnableConfig | None = None) -> dict:
     """
     Step 1a: Phân loại câu hỏi vào 3 nhóm:
       - use_tool       → câu hỏi luật giao thông → đi _node_rewrite

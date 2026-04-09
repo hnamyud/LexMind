@@ -49,10 +49,15 @@ class RAGService:
         self._uri = settings.NEO4J_URI
         self._user = settings.NEO4J_USER
         self._password = settings.NEO4J_PASSWORD
-        self._api_key = settings.GOOGLE_API_KEY
+        self._api_key = settings.LOCAL_API_KEY
+        self._base_url = settings.BASE_URL
         self._llm_router_model = settings.LLM_ROUTER
         self._llm_direct_model = settings.LLM_DIRECT
         self._llm_generator_model = settings.LLM_GENERATOR
+        # Per-level generator models
+        self._llm_generator_model_l1 = settings.LLM_GENERATOR_L1
+        self._llm_generator_model_l2 = settings.LLM_GENERATOR_L2
+        self._llm_generator_model_l3 = settings.LLM_GENERATOR_L3
         self._llm_reflector_model = settings.LLM_REFLECTOR
         self._api_key_serper = settings.SERPER_API_KEY
         self._api_key_firecrawl = settings.FIRECRAWL_API_KEY

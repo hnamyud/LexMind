@@ -17,6 +17,8 @@ import json
 import logging
 import time
 
+from app.core.config import settings
+
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.nodes.base import _extract_ai_text
@@ -142,6 +144,9 @@ async def ask_stream(
     # Error tracking
     error_message = None
     error_type = None
+
+    # Model tracking
+    final_complexity_level = 2  # mặc định level 2 nếu không detect được
 
     try:
         async for event in self._graph.astream_events(initial_state, config=graph_config, version="v2"):
@@ -330,13 +335,25 @@ async def ask_stream(
                 if isinstance(output, dict):
                     if evt_name == "router":
                         final_route = output.get("route", "")
+                        # Cầp nhật complexity_level từ router nếu có
+                        cl = output.get("complexity_level")
+                        if cl is not None:
+                            final_complexity_level = cl
                     elif evt_name == "rewrite":
                         final_entities = output.get("entities", {})
                         final_legal_query = output.get("legal_query", "")
+                        # rewrite cũng có thể chứa complexity_level
+                        cl = output.get("complexity_level")
+                        if cl is not None:
+                            final_complexity_level = cl
                     elif evt_name == "cache_check":
                         is_cache_hit = output.get("cache_hit", False)
                     elif evt_name == "reflector":
                         final_verdict = output.get("reflection", "")
+                        # reflector có thể điều chỉnh lại complexity_level
+                        cl = output.get("complexity_level")
+                        if cl is not None:
+                            final_complexity_level = cl
 
                 # ── generator_cached: emit cached response trực tiếp ─────
                 if evt_name == "generator_cached" and isinstance(output, dict):
@@ -365,8 +382,25 @@ async def ask_stream(
         thinking_tokens=total_thinking_tokens,
     )
 
+    # Xác định model generator thực tế được dùng theo complexity_level
+    _gen_model_map = {
+        1: settings.LLM_GENERATOR_L1,
+        2: settings.LLM_GENERATOR_L2,
+        3: settings.LLM_GENERATOR_L3,
+    }
+    actual_generator_model = _gen_model_map.get(final_complexity_level, settings.LLM_GENERATOR_L2)
+
     metrics = {
-        "model": "gemini-3-flash-preview",
+        # Generator model thực tế được dùng (theo level)
+        "model": actual_generator_model,
+        "complexityLevel": final_complexity_level,
+        # Các model của node khác
+        "modelRouter": settings.LLM_ROUTER,
+        "modelReflector": settings.LLM_REFLECTOR,
+        "modelDirect": settings.LLM_DIRECT,
+        "modelGeneratorL1": settings.LLM_GENERATOR_L1,
+        "modelGeneratorL2": settings.LLM_GENERATOR_L2,
+        "modelGeneratorL3": settings.LLM_GENERATOR_L3,
         "ttft": ttft,
         "totalTime": total_time_ms,
         "graphQueryTime": node_timings.get("retriever"),
