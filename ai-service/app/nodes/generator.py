@@ -32,9 +32,9 @@ async def _node_generator(self, state: dict) -> dict:
         3: self._llm_gen_l3,  # thinking_level=high
     }
     llm = _llm_gen_map.get(complexity_level, self._llm_gen_l2)
+    _model_name = getattr(llm, "model", None) or getattr(llm, "model_name", "unknown")
     logging.info(
-        f"[STEP4] LLM selected: gen_l{complexity_level}, "
-        f"thinking_budget={({1: 0, 2: 2048, 3: 4096}).get(complexity_level, 2048)}"
+        f"[STEP4] Generator L{complexity_level} → model={_model_name!r}"
     )
 
     messages = list(state.get("messages", []))

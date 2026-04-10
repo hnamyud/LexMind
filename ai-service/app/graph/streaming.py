@@ -438,13 +438,34 @@ async def ask_stream(
     metrics["nodeTimings"] = node_breakdown
     metrics["slowestNode"] = slowest_node
 
-    logging.info(f"[METRICS] Final metrics: {metrics}")
-    logging.info(f"[METRICS] Node breakdown: {node_breakdown}")
-    if slowest_node:
-        logging.info(
-            f"[METRICS] Slowest node: {slowest_node['node']}="
-            f"{slowest_node['durationMs']}ms"
-        )
+    # ── Human-readable summary log ─────────────────────────────────────
+    _tok_in  = total_input_tokens  or 0
+    _tok_out = total_output_tokens or 0
+    _tok_thi = total_thinking_tokens or 0
+    _cost_str = f"${cost:.5f}" if cost else "$0"
+    _ttft_str = f"{ttft}ms" if ttft is not None else "N/A"
+    _cache_str = "HIT ⚡" if is_cache_hit else "MISS"
+    _slowest_str = (
+        f"{slowest_node['node']}={slowest_node['durationMs']}ms"
+        if slowest_node else "N/A"
+    )
+    _node_str = " | ".join(
+        f"{k.replace('Time','')}={v}ms"
+        for k, v in node_breakdown.items()
+        if isinstance(v, int)
+    )
+
+    logging.info(
+        f"[METRICS] ✅ Pipeline done\n"
+        f"  Generator  : L{final_complexity_level} → {actual_generator_model}\n"
+        f"  Router     : {settings.LLM_ROUTER}\n"
+        f"  Reflector  : {settings.LLM_REFLECTOR}\n"
+        f"  Tokens     : in={_tok_in} | out={_tok_out} | think={_tok_thi}\n"
+        f"  Cost       : {_cost_str} | TTFT: {_ttft_str} | Total: {total_time_ms}ms\n"
+        f"  Cache      : {_cache_str}\n"
+        f"  Slowest    : {_slowest_str}\n"
+        f"  Nodes      : {_node_str}"
+    )
 
     yield json.dumps({"type": "metrics", "content": metrics}, ensure_ascii=False) + "\n"
     yield json.dumps(

@@ -60,6 +60,7 @@ from langchain_core.tools import tool, BaseTool
 from langchain_core.callbacks import CallbackManagerForToolRun, AsyncCallbackManagerForToolRun
 from pydantic import BaseModel, Field
 import re
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -559,7 +560,7 @@ class GraphRetrievalTool(BaseTool):
 
         try:
             async with self.driver.session(
-                database="neo4j",
+                database=settings.NEO4J_DATABASE,
                 default_access_mode=neo4j.WRITE_ACCESS,
             ) as session:
                 await session.run(create_index_cypher)
@@ -598,7 +599,7 @@ class GraphRetrievalTool(BaseTool):
 
         try:
             async with self.driver.session(
-                database="neo4j",
+                database=settings.NEO4J_DATABASE,
                 default_access_mode=neo4j.READ_ACCESS,
             ) as session:
                 result = await session.run(
@@ -623,7 +624,7 @@ class GraphRetrievalTool(BaseTool):
 
         try:
             async with self.driver.session(
-                database="neo4j",
+                database=settings.NEO4J_DATABASE,
                 default_access_mode=neo4j.READ_ACCESS,
             ) as session:
                 result = await session.run(
@@ -653,7 +654,7 @@ class GraphRetrievalTool(BaseTool):
 
         try:
             async with self.driver.session(
-                database="neo4j",
+                database=settings.NEO4J_DATABASE,
                 default_access_mode=neo4j.READ_ACCESS,
             ) as session:
                 tasks = []
@@ -727,7 +728,7 @@ class GraphRetrievalTool(BaseTool):
 
         try:
             async with self.driver.session(
-                database="neo4j",
+                database=settings.NEO4J_DATABASE,
                 default_access_mode=neo4j.READ_ACCESS,
             ) as session:
                 result = await session.run(

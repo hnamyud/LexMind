@@ -41,6 +41,15 @@ def _route_after_cache(state: RAGState) -> str:
     return "retriever"
 
 
+def _route_after_rewrite(state: RAGState) -> str:
+    """Rewrite → cache_check (nếu bật cache) hoặc retriever (nếu tắt cache)."""
+    if state.get("enable_cache", True):
+        return "cache_check"
+
+    logging.info("[ROUTING] enable_cache=False → Bỏ qua cache_check, đi thẳng retriever")
+    return "retriever"
+
+
 def _route_after_reflector(state: RAGState) -> str:
     """
     Step 3 → routing:
@@ -88,7 +97,8 @@ def build_graph(service):
 
     Flow:
       router → [rewrite | agent_direct | agent_reject]
-      rewrite → cache_check → [generator_cached | retriever]
+    rewrite → [cache_check | retriever]
+    cache_check → [generator_cached | retriever]
       retriever → reflector → [generator | clarifier | web_search_fallback]
       web_search_fallback → generator
     """
@@ -145,7 +155,14 @@ def build_graph(service):
     )
     graph.add_edge("agent_direct", END)
     graph.add_edge("agent_reject", END)
-    graph.add_edge("rewrite", "cache_check")
+    graph.add_conditional_edges(
+        "rewrite",
+        _route_after_rewrite,
+        {
+            "cache_check": "cache_check",
+            "retriever":   "retriever",
+        },
+    )
     graph.add_conditional_edges(
         "cache_check",
         _route_after_cache,

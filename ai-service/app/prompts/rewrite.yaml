@@ -42,11 +42,12 @@ template: |
   DẤU HIỆU ĐA VI PHẠM:
     - Liên từ: "và", "đồng thời", "vừa...vừa..."
     - Liệt kê: "vi phạm A, B và C"
+    - Hành vi độc lập: "không đội mũ rồi còn vượt đèn đỏ nữa"
 
   KHÔNG PHẢI ĐA VI PHẠM:
-    - 1 vi phạm nhiều điều kiện: "nồng độ cồn mức 2 trên cao tốc"
-    - 1 vi phạm nhiều loại xe: "vượt đèn đỏ xe máy và ô tô"
-    - So sánh: "khác biệt mức 1 và mức 2"
+    - 1 vi phạm + nhiều điều kiện: "nồng độ cồn mức 2 trên cao tốc" → 1 query, conditions=["nồng độ cồn mức 2", "trên đường cao tốc"]
+    - 1 vi phạm + nhiều loại xe so sánh: "vượt đèn đỏ xe máy và ô tô khác nhau không?" → 1 query, so sánh mức phạt
+    - So sánh luật: "khác biệt mức 1 và mức 2" → 1 query, dạng so sánh
 
   Ví dụ: "Xe máy không đội mũ và nồng độ cồn mức 2"
   → sub_queries = [
@@ -68,26 +69,52 @@ template: |
   • Level 1 — Simple:
     - 1 chủ thể, 1 hành vi duy nhất, rõ ràng, không cần suy luận nhiều
     - sub_queries = [] (không có đa vi phạm)
-    - KHÔNG có từ khóa xung đột/tranh chấp/tai nạn
+    - Không chứa từ khóa: tai nạn, va chạm, tranh chấp, bồi thường, thiệt hại, đối đầu, cãi nhau, lỗi cả hai, lỗi người này người kia
     - Ví dụ: "Phạt nồng độ cồn mức 1 xe máy?", "Vượt đèn đỏ bị phạt bao nhiêu?"
 
   • Level 2 — Medium:
-    - Nhiều chủ thể hoặc loại xe khác nhau cần phân biệt
-    - sub_queries có đúng 1 phần tử
-    - Câu hỏi so sánh hoặc liên quan đến điều kiện phụ
-    - Ví dụ: "Người đi bộ băng đường sai vs ô tô không nhường đường?"
+    - Cần phân biệt/so sánh 2+ tình huống tương tự (cùng vi phạm nhưng khác chủ thể/loại xe/điều kiện)
+    - Hoặc: Câu hỏi có điều kiện phụ ảnh hưởng mức phạt (vị trí, tình trạng xe, giấy phép...)
+    - Hoặc: sub_queries có 2 phần tử trở lên nhưng là vi phạm đơn giản, không liên quan tai nạn
+    - Ví dụ: "Người đi bộ băng đường sai vs ô tô không nhường đường?", "Xe tải và xe khách chở quá tải khác nhau không?", "Không GPLX mà lái xe máy trên cao tốc"
 
   • Level 3 — Complex:
-    - Tình huống tai nạn giao thông, tranh chấp bồi thường
-    - Nhiều lỗi kết hợp (sub_queries ≥ 2)
-    - Cần phân tích trách nhiệm pháp lý nhiều bên
-    - Ví dụ: "Va chạm xe máy với ô tô, cả 2 đều lỗi, bồi thường thế nào?"
+    - Tình huống tai nạn giao thông, va chạm, đối đầu
+    - Nhiều bên vi phạm cùng lúc dẫn đến hậu quả (sub_queries ≥ 2 + ngữ cảnh tai nạn)
+    - Cần phân tích tỷ lệ lỗi, mức độ lỗi, trách nhiệm pháp lý nhiều bên
+    - Ví dụ: "Va chạm xe máy với ô tô, cả 2 đều lỗi, bồi thường thế nào?", "Tông vào xe đang đỗ, ai chịu trách nhiệm?"
 
   QUY TẮC NHANH:
-    - sub_queries.length == 0 + 1 hành vi rõ → level 1
-    - sub_queries.length == 1 HOẶC nhiều chủ thể → level 2
-    - sub_queries.length >= 2 HOẶC có "tai nạn"/"tranh chấp"/"bồi thường" → level 3
+    1. Nếu chứa từ khóa tai nạn/va chạm/tranh chấp/bồi thường → Level 3
+    2. Nếu sub_queries.length ≥ 2 VÀ ngữ cảnh là tai nạn → Level 3  
+    3. Nếu cần so sánh phân biệt 2+ tình huống → Level 2
+    4. Nếu sub_queries.length ≥ 2 (không phải tai nạn) → Level 2
+    5. Nếu có điều kiện phụ phức tạp ảnh hưởng mức phạt → Level 2
+    6. Còn lại → Level 1
+  
+  ⚠️ Không chắc chắn → chọn Level 2 (an toàn hơn)
 
+  ══════════════════════════════════════════════════════════════
+  5. XỬ LÝ EDGE CASES
+  ══════════════════════════════════════════════════════════════
+  
+  A. THIẾU THÔNG TIN (incomplete = true):
+     - Không xác định được hành vi vi phạm: "Bị phạt bao nhiêu?", "Có bị tước GPLX không?"
+     - Không xác định được phương tiện: "Nồng độ cồn mức 2 bị sao?" (thiếu xe gì)
+     - Không xác định được chủ thể: "Chở quá tải bị phạt thế nào?" (cá nhân hay doanh nghiệp?)
+     → Trả về best guess + incomplete=true, không tự bịa thêm
+  
+  B. MÂU THUẪN NỘI DUNG:
+     - "Xe đạp không đội mũ bảo hiểm" → xe đạp không bắt buộc mũ bảo hiểm, đánh dấu invalid=true + lý do
+     - "Uống rượu lái xe đạp" → xe đạp không áp dụng nồng độ cồn, đánh dấu invalid=true
+  
+  C. KHÔNG RÕ MỨC ĐỘ:
+     - "Uống 2 lon bia" → để nguyên trong conditions, không đoán mức cồn
+     - "Say xỉn" → conditions=["say xỉn"], không quy đổi
+  
+  D. NGỮ CẢNH KHÔNG RÕ RÀNG:
+     - "Còn nữa không?" / "Thế còn..." → nếu không gộp được với lịch sử → incomplete=true
+  
   ══════════════════════════════════════════════════════════════
   OUTPUT (JSON thuần, KHÔNG markdown)
   ══════════════════════════════════════════════════════════════

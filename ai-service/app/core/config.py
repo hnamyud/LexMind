@@ -8,14 +8,15 @@ load_dotenv(dotenv_path=ROOT_DIR / ".env")
 
 
 class Settings:
-    NEO4J_URI: str = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    NEO4J_USER: str = os.getenv("NEO4J_USER", "neo4j")
+    NEO4J_URI: str = os.getenv("NEO4J_URI", "")
+    NEO4J_USER: str = os.getenv("NEO4J_USER", "")
     NEO4J_PASSWORD: str = os.getenv("NEO4J_PASSWORD", "")
+    NEO4J_DATABASE: str = os.getenv("NEO4J_DATABASE", "")
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     LOCAL_API_KEY: str = os.getenv("LOCAL_API_KEY", "")
     BASE_URL: str = os.getenv("BASE_URL", "")
-    LLM_ROUTER: str = os.getenv("LLM_ROUTER", "gemini-3.1-flash-lite-preview")
-    LLM_DIRECT: str = os.getenv("LLM_DIRECT", "gemini-3.1-flash-lite-preview")
+    LLM_ROUTER: str = os.getenv("LLM_ROUTER", "")
+    LLM_DIRECT: str = os.getenv("LLM_DIRECT", "")
     LLM_GENERATOR: str = os.getenv("LLM_GENERATOR", "gemini-3-flash-preview")
     # Per-level generator models — fallback to LLM_GENERATOR nếu không set
     LLM_GENERATOR_L1: str = os.getenv("LLM_GENERATOR_L1") or os.getenv("LLM_GENERATOR", "gemini-3-flash-preview")

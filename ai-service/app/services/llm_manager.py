@@ -34,88 +34,93 @@ def connect_llm(service) -> None:
         # ── Router LLM (nhẹ, phân loại nhanh) 
         # service._llm_router = ChatGoogleGenerativeAI(
         #     model=service._llm_router_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=0,
         #     timeout=25,
         #     max_retries=1,
         # )
 
-        # # ── Direct LLM (agent_direct — streaming thật sự) 
+        # # # ── Direct LLM (agent_direct — streaming thật sự) 
         # service._llm_direct = ChatGoogleGenerativeAI(
         #     model=service._llm_direct_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=1.0,
         #     streaming=True,
         #     timeout=60,
         #     max_retries=2,
         # )
 
-        # # ── Generator LLMs (Complexity Level 1/2/3) 
+        # # # ── Generator LLMs (Complexity Level 1/2/3) 
         # # Level 1 — Simple: có thể thinking rất ít hoặc không
         # service._llm_gen_l1 = ChatGoogleGenerativeAI(
         #     model=service._llm_generator_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=0,
         #     thinking_level="low",
         #     include_thoughts=False,
         #     streaming=True,
         # )
-        # # Level 2 — Medium: thinking vừa phải
+        # # # Level 2 — Medium: thinking vừa phải
         # service._llm_gen_l2 = ChatGoogleGenerativeAI(
         #     model=service._llm_generator_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=0,
         #     thinking_level="medium",
         #     include_thoughts=True,
         #     streaming=True,
         # )
-        # # Level 3 — Complex: full thinking
+        # # # Level 3 — Complex: full thinking
         # service._llm_gen_l3 = ChatGoogleGenerativeAI(
         #     model=service._llm_generator_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=0,
         #     thinking_level="high",
         #     include_thoughts=True,
         #     streaming=True,
         # )
 
-        # # ── Reflector LLMs (budget = Generator / 4) ────────────────────
+        # # # ── Reflector LLMs (budget = Generator / 4) ────────────────────
         # # Level 1: Reflector bị skip hoàn toàn — không cần instance
         # # Level 2:
         # service._llm_ref_l2 = ChatGoogleGenerativeAI(
         #     model=service._llm_reflector_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=0,
         #     # thinking_level="low",
         # )
-        # # Level 3:
+        # # # Level 3:
         # service._llm_ref_l3 = ChatGoogleGenerativeAI(
         #     model=service._llm_reflector_model,
-        #     google_api_key=service._api_key,
+        #     google_api_key=service._google_api_key,
         #     temperature=0,
         #     thinking_level="low",
         # )
 
-        # OpenAI Proxy (dùng cho test proxy model)
+    # OpenAI Proxy (dùng cho test proxy model)
+
         service._llm_router = ChatOpenAI(
             model=service._llm_router_model,
             api_key=service._api_key,
             base_url=service._base_url,
             temperature=0,
+            extra_body={
+                "thinking": {"type": "disabled"}
+            },
             max_tokens=1024,
         )
 
-        # ── Direct LLM (agent_direct — streaming thật sự) 
+        # # ── Direct LLM (agent_direct — streaming thật sự) 
         service._llm_direct = ChatOpenAI(
             model=service._llm_direct_model,
             api_key=service._api_key,
             base_url=service._base_url,
             temperature=1.0,
+            max_tokens=1024,
             streaming=True,
         )
 
-        # ── Generator LLMs (Complexity Level 1/2/3) 
-        # Level 1 — Simple: model nhẹ hơn (LLM_GENERATOR_L1)
+        # # ── Generator LLMs (Complexity Level 1/2/3) 
+        # # Level 1 — Simple: model nhẹ hơn (LLM_GENERATOR_L1)
         service._llm_gen_l1 = ChatOpenAI(
             model=service._llm_generator_model_l1,
             api_key=service._api_key,
@@ -123,7 +128,7 @@ def connect_llm(service) -> None:
             temperature=0,
             streaming=True,
         )
-        # Level 2 — Medium: thinking vừa phải (LLM_GENERATOR_L2)
+        # # Level 2 — Medium: thinking vừa phải (LLM_GENERATOR_L2)
         service._llm_gen_l2 = ChatOpenAI(
             model=service._llm_generator_model_l2,
             api_key=service._api_key,
@@ -131,7 +136,7 @@ def connect_llm(service) -> None:
             temperature=0,
             streaming=True,
         )
-        # Level 3 — Complex: full thinking (LLM_GENERATOR_L3)
+        # # Level 3 — Complex: full thinking (LLM_GENERATOR_L3)
         service._llm_gen_l3 = ChatOpenAI(
             model=service._llm_generator_model_l3,
             api_key=service._api_key,
@@ -140,9 +145,9 @@ def connect_llm(service) -> None:
             streaming=True,
         )
 
-        # ── Reflector LLMs (budget = Generator / 4) ────────────────────
-        # Level 1: Reflector bị skip hoàn toàn — không cần instance
-        # Level 2:
+        # # ── Reflector LLMs (budget = Generator / 4) ────────────────────
+        # # Level 1: Reflector bị skip hoàn toàn — không cần instance
+        # # Level 2:
         service._llm_ref_l2 = ChatOpenAI(
             model=service._llm_reflector_model,
             api_key=service._api_key,
@@ -150,7 +155,7 @@ def connect_llm(service) -> None:
             max_tokens=512,
             temperature=0,
         )
-        # Level 3:
+        # # Level 3:
         service._llm_ref_l3 = ChatOpenAI(
             model=service._llm_reflector_model,
             api_key=service._api_key,

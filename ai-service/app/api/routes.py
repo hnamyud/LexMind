@@ -151,7 +151,7 @@ async def get_law_detail(node_id: str, request: Request):
     
     try:
         async with svc._driver.session(
-            database="neo4j",
+            database=settings.NEO4J_DATABASE,
             default_access_mode=neo4j.READ_ACCESS,
         ) as session:
             result = await session.run(query, nodeId=node_id)
@@ -231,7 +231,7 @@ async def graph_demo(request: Request, id: str = "d6_k6"):
 
     try:
         async with svc._driver.session(
-            database="neo4j",
+            database=settings.NEO4J_DATABASE,
             default_access_mode=neo4j.READ_ACCESS,
         ) as session:
             result = await session.run(query, node_id=id)

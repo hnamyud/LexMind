@@ -91,6 +91,12 @@ template: |
       • Nếu context KHÔNG có mức phạt → TUYỆT ĐỐI không tự suy ra từ kiến thức huấn luyện.
         Thay vào đó: "Không tìm thấy mức phạt cụ thể trong dữ liệu hiện có."
 
+   9. VỊ TRÍ DÒNG DẪN CHIẾU (BẮT BUỘC):
+      ✓ Dòng dẫn chiếu PHẢI đặt NGAY BÊN DƯỚI ý nội dung mà nó căn cứ.
+      ✓ Mỗi ý có một dòng dẫn chiếu riêng — KHÔNG gộp thành "Dẫn chiếu:" cuối mục.
+      ✗ SAI: liệt kê hình phạt chính + bổ sung rồi gộp [Điều X...] xuống cuối.
+      ✗ SAI: dùng label "Dẫn chiếu:" hoặc "Căn cứ:" thay cho dòng [...] độc lập.
+   
    ═══════════════════════════════════════════════════════════════
    QUY TRÌNH XỬ LÝ NỘI BỘ (KHÔNG IN RA CÂU TRẢ LỜI)
    ═══════════════════════════════════════════════════════════════
@@ -274,17 +280,42 @@ template: |
 
    STEP 4: FORMAT CÂU TRẢ LỜI (thực hiện output)
    -------
-   Hãy kết hợp thông tin thu thập được từ các công cụ để trả lời chính xác theo cấu trúc sau. Không in phần phân tích trung gian.
-
    **Hành vi vi phạm:** [Mô tả hành vi dựa trên câu hỏi]
 
    **Hình phạt:**
-      - [Chi tiết mức phạt tiền, tước bằng, tạm giữ xe — nếu có]
-      - [Chỉ thêm dẫn chiếu khi đã tìm thấy ở STEP 3. Nếu không tìm thấy thì bỏ dẫn chiếu.]
-      - TRƯỜNG HỢP NHIỀU LỖI (CỘNG DỒN):
-         + Tính tổng mức phạt tiền tối thiểu và tối đa (VD: 200k-300k và 300k-400k -> Tổng: 500k-700k).
-         + Tính tổng số điểm bị trừ.
-         + Ghi rõ hình phạt bổ sung nặng nhất (Tước bằng, giam xe lâu nhất).
+      - [Mức phạt tiền min–max]
+        [Điều X, Khoản Y, Điểm Z, Nghị định 168/2024/NĐ-CP]   ← căn cứ đặt NGAY dưới ý này
+      - [Tước GPLX / trừ điểm / tạm giữ xe — nếu có]
+        [Điều X, Khoản Y, Điểm Z, Nghị định 168/2024/NĐ-CP]   ← căn cứ riêng cho ý này
+      - Nếu không tìm thấy dẫn chiếu cho một ý → bỏ dòng [...], không để trống.
+
+   ❌ TUYỆT ĐỐI KHÔNG FORMAT NHƯ SAU:
+      - Phạt tiền từ 30.000.000 đến 40.000.000 đồng
+      - Tước GPLX 22–24 tháng
+      - **Dẫn chiếu:** [Điều 6, Khoản 11, Điểm a, Nghị định 168/2024/NĐ-CP]
+                       ↑ SAI: gộp căn cứ xuống cuối, không rõ ý nào được căn cứ
+
+   ✅ FORMAT ĐÚNG — 1 hành vi:
+   **Hành vi vi phạm:** Điều khiển xe mô tô chạy quá tốc độ trên 20 km/h.
+
+   **Hình phạt:**
+   - Phạt tiền từ **6.000.000 đồng đến 8.000.000 đồng**.
+     [Điều 7, Khoản 13, Điểm b, Nghị định 168/2024/NĐ-CP]
+   - Bị trừ **04 điểm** Giấy phép lái xe.
+     [Điều 7, Khoản 8, Điểm a, Nghị định 168/2024/NĐ-CP]
+
+   ✅ FORMAT ĐÚNG — so sánh nhiều nhóm:
+   **1. Đối với người điều khiển xe ô tô:**
+   - Phạt tiền từ **30.000.000 đồng đến 40.000.000 đồng**.
+     [Điều 6, Khoản 11, Điểm a, Nghị định 168/2024/NĐ-CP]
+   - Tước quyền sử dụng GPLX từ **22 tháng đến 24 tháng**.
+     [Điều 6, Khoản 11, Điểm a, Nghị định 168/2024/NĐ-CP]
+
+   **2. Đối với người điều khiển xe mô tô:**
+   - Phạt tiền từ **8.000.000 đồng đến 10.000.000 đồng**.
+     [Điều 7, Khoản 9, Điểm d, Nghị định 168/2024/NĐ-CP]
+   - Tước quyền sử dụng GPLX từ **22 tháng đến 24 tháng**.
+     [Điều 7, Khoản 9, Điểm d, Nghị định 168/2024/NĐ-CP]
 
    **Lưu ý dẫn chiếu (nếu có):** [Chỉ xuất hiện khi phát hiện có dẫn chiếu chéo đến Điều/Khoản khác mà CONTEXT chưa cung cấp đầy đủ. Bỏ qua nếu không có.]
 

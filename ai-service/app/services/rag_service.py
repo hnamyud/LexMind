@@ -50,6 +50,7 @@ class RAGService:
         self._user = settings.NEO4J_USER
         self._password = settings.NEO4J_PASSWORD
         self._api_key = settings.LOCAL_API_KEY
+        self._google_api_key = settings.GOOGLE_API_KEY
         self._base_url = settings.BASE_URL
         self._llm_router_model = settings.LLM_ROUTER
         self._llm_direct_model = settings.LLM_DIRECT
@@ -169,7 +170,7 @@ class RAGService:
                 graph_timeout=5.0,
                 consequence_timeout=3.0,    # consequence-first branch
                 # RRF threshold
-                rrf_threshold=0.016,        # Balanced mode
+                rrf_threshold=0.015,        # Balanced mode
                 # Vehicle-aware boosting
                 vehicle_boost_enabled=True,
                 vehicle_boost_multiplier=1.3,
@@ -197,7 +198,7 @@ class RAGService:
         question: str,
         conversation_id: str | None = None,
         enable_web_search: bool = True,
-        enable_cache: bool = True,
+        enable_cache: bool = False,
     ):
         """Streaming pipeline — delegate sang graph/streaming.ask_stream."""
         async for chunk in _ask_stream_fn(
