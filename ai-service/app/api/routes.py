@@ -17,11 +17,11 @@ from app.eval.service import EvalService
 
 router = APIRouter()
 
-api_key_header = APIKeyHeader(name="X-Internal-Secret", auto_error=True)
+api_key_header = APIKeyHeader(name="INTERNAL-SECRET", auto_error=True)
 
 def verify_internal_secret(api_key: str = Depends(api_key_header)):
     if api_key != settings.INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="X-Internal-Secret không hợp lệ")
+        raise HTTPException(status_code=403, detail="INTERNAL-SECRET không hợp lệ")
     return api_key
 
 
@@ -102,7 +102,7 @@ async def debug_info(request: Request):
 
 @router.delete("/cache", tags=["Cache"], dependencies=[Depends(verify_internal_secret)])
 async def flush_cache(request: Request):
-    """Xoá toàn bộ semantic cache (yêu cầu X-Internal-Secret)."""
+    """Xoá toàn bộ semantic cache (yêu cầu INTERNAL-SECRET)."""
     svc = _get_service(request)
     if not svc._cache or not svc._cache.is_connected:
         raise HTTPException(status_code=503, detail="Redis Semantic Cache chưa được kết nối.")

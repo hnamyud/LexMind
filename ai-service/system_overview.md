@@ -1,7 +1,7 @@
 # AI Service API Reference
 
 Base URL: `http://127.0.0.1:8001`  
-Internal service — chỉ nhận request từ `backend-core`. Mọi endpoint yêu cầu header `X-Internal-Secret`.
+Internal service — chỉ nhận request từ `backend-core`. Mọi endpoint yêu cầu header `INTERNAL-SECRET`.
 
 ---
 
@@ -10,10 +10,10 @@ Internal service — chỉ nhận request từ `backend-core`. Mọi endpoint y�
 Tất cả endpoint đều yêu cầu header sau:
 
 ```
-X-Internal-Secret: <secret>
+INTERNAL-SECRET: <secret>
 ```
 
-Giá trị phải khớp với biến môi trường `X_INTERNAL_SECRET` được cấu hình cho cả `ai-service` và `backend-core`. Request thiếu header này sẽ nhận `403 Forbidden`.
+Giá trị phải khớp với biến môi trường `INTERNAL_SECRET` được cấu hình cho cả `ai-service` và `backend-core`. Request thiếu header này sẽ nhận `403 Forbidden`.
 
 ---
 
@@ -39,7 +39,7 @@ Core RAG pipeline. Nhận câu hỏi của người dùng, chạy qua toàn bộ
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `X-Internal-Secret` | Yes | Internal auth secret |
+| `INTERNAL-SECRET` | Yes | Internal auth secret |
 | `Content-Type` | Yes | `application/json` |
 
 **Body**
@@ -146,7 +146,7 @@ Response là **NDJSON stream** (newline-delimited JSON). Mỗi dòng là một J
 
 | HTTP Status | Mô tả | Cách xử lý |
 |-------------|--------|------------|
-| `403` | Sai hoặc thiếu `X-Internal-Secret` | Kiểm tra biến môi trường |
+| `403` | Sai hoặc thiếu `INTERNAL-SECRET` | Kiểm tra biến môi trường |
 | `422` | Body không hợp lệ (thiếu field bắt buộc) | Kiểm tra schema request |
 | `500` | Lỗi nội bộ pipeline | Xem log, kiểm tra kết nối Neo4j/Redis |
 
@@ -194,7 +194,7 @@ Sinh tiêu đề ngắn gọn cho một phiên hội thoại dựa trên câu h�
 
 | HTTP Status | Mô tả |
 |-------------|--------|
-| `403` | Sai `X-Internal-Secret` |
+| `403` | Sai `INTERNAL-SECRET` |
 | `422` | Thiếu `conversation_id` hoặc `first_question` |
 | `500` | LLM timeout hoặc lỗi nội bộ |
 
@@ -216,7 +216,7 @@ Xóa toàn bộ LangGraph checkpoint của một phiên hội thoại. Thường
 
 ```
 DELETE /conversations/3fa85f64-5717-4562-b3fc-2c963f66afa6/checkpoints
-X-Internal-Secret: your_secret
+INTERNAL-SECRET: your_secret
 ```
 
 ### Response
@@ -239,7 +239,7 @@ X-Internal-Secret: your_secret
 
 | HTTP Status | Mô tả |
 |-------------|--------|
-| `403` | Sai `X-Internal-Secret` |
+| `403` | Sai `INTERNAL-SECRET` |
 | `500` | Lỗi kết nối PostgreSQL checkpoint store |
 
 ---
@@ -260,7 +260,7 @@ Lấy chi tiết một node điều luật từ Neo4j Knowledge Graph. Dùng đ�
 
 ```
 GET /law-detail/dieu_khoan_168_dieu6_khoan1
-X-Internal-Secret: your_secret
+INTERNAL-SECRET: your_secret
 ```
 
 ### Response
@@ -296,7 +296,7 @@ X-Internal-Secret: your_secret
 
 | HTTP Status | Mô tả | Cách xử lý |
 |-------------|--------|------------|
-| `403` | Sai `X-Internal-Secret` | Kiểm tra header |
+| `403` | Sai `INTERNAL-SECRET` | Kiểm tra header |
 | `404` | Node không tồn tại trong Neo4j | Kiểm tra lại `node_id` từ metadata |
 | `500` | Lỗi kết nối Neo4j | Kiểm tra Neo4j đang chạy |
 
@@ -312,7 +312,7 @@ Không có body hay parameter.
 
 ```
 GET /health
-X-Internal-Secret: your_secret
+INTERNAL-SECRET: your_secret
 ```
 
 ### Response
@@ -409,7 +409,7 @@ Xóa toàn bộ semantic cache trong Redis. Thực hiện khi dữ liệu trong 
 
 | HTTP Status | Mô tả |
 |-------------|--------|
-| `403` | Sai `X-Internal-Secret` |
+| `403` | Sai `INTERNAL-SECRET` |
 | `500` | Lỗi kết nối Redis |
 
 ---
@@ -437,7 +437,7 @@ const response = await fetch('http://127.0.0.1:8001/ask/stream', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
-    'X-Internal-Secret': process.env.X_INTERNAL_SECRET,
+    'INTERNAL-SECRET': process.env.INTERNAL_SECRET,
   },
   body: JSON.stringify({
     question: 'Không đội mũ bảo hiểm bị phạt bao nhiêu?',

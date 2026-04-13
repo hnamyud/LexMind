@@ -1,14 +1,20 @@
 import os
 
 from typing_extensions import Annotated, TypedDict
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
-# Dùng Gemini Flash làm grader — rẻ hơn GPT-4, đủ tốt cho legal domain
-grader_llm = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite-preview",
+
+grader_llm = ChatOpenAI(
+    model=os.getenv("LLM_DIRECT"),
+    api_key=os.getenv("LOCAL_API_KEY"),
+    base_url=os.getenv("BASE_URL"),
     temperature=0,
-    google_api_key=os.getenv("GOOGLE_API_KEY"),
-)
+    
+    extra_body={
+        "thinking": {"type": "disabled"}
+    },
+    max_tokens=4096,
+    )
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -20,8 +26,9 @@ def _get_expected_behavior(inputs: dict, reference_outputs: dict) -> str:
         or "answer"
     )
 
-SKIP_SENTINEL = None  # Trả về None để báo hiệu evaluator này bị skip
-
+def _skip_result(key: str, reason: str) -> dict:
+    """Tạo kết quả skip hợp lệ cho LangSmith."""
+    return {"key": key, "score": None, "comment": reason}
 
 # ── Evaluator 1: Correctness ──────────────────────────────────────────────
 class CorrectnessGrade(TypedDict):
@@ -37,9 +44,11 @@ Tiêu chí chấm (theo thứ tự ưu tiên):
 (4) Cho phép thêm thông tin bổ sung miễn là không mâu thuẫn với ground truth.
 (5) KHÔNG yêu cầu cite điều khoản chính xác — chỉ chấm nội dung pháp lý.
 
-Correct = True chỉ khi đáp ứng đủ tiêu chí (1) và (2). (3) là optional."""
+Correct = True chỉ khi đáp ứng đủ tiêu chí (1) và (2). (3) là optional.
 
-def correctness(inputs: dict, outputs: dict, reference_outputs: dict) -> bool | None:
+Trả lời đúng schema json của evaluator."""
+
+def correctness(inputs: dict, outputs: dict, reference_outputs: dict) -> bool | dict:
     """
     Chấm tính đúng đắn pháp lý của câu trả lời.
 
@@ -53,7 +62,7 @@ def correctness(inputs: dict, outputs: dict, reference_outputs: dict) -> bool | 
 
     # Skip với refuse và clarify
     if expected_behavior in ("refuse", "clarify"):
-        return SKIP_SENTINEL
+        return _skip_result("correctness", f"skipped: expected_behavior={expected_behavior}")
 
     grader = grader_llm.with_structured_output(CorrectnessGrade, method="json_schema")
     student_answer = (outputs or {}).get("answer", "")
@@ -80,7 +89,9 @@ STUDENT ANSWER: {student_answer}"""
         {"role": "system", "content": CORRECTNESS_PROMPT},
         {"role": "user",   "content": prompt},
     ])
-    return grade["correct"]
+    if not isinstance(grade, dict):
+        return False
+    return grade.get("correct", False)
 
 
 # ── Evaluator 2: Behavior Compliance ────────────────────────────────────
@@ -99,9 +110,17 @@ Quy tắc:
                                    (ví dụ: loại xe, vận tốc cụ thể) thay vì tự trả lời.
                                    Nếu AI đưa ra con số tiền phạt khi chưa đủ thông tin → Not compliant.
 
-Chú ý:
-- Với "answer": Nếu AI từ chối câu có thể trả lời được → Not compliant.
-- Với "clarify": AI phải liệt kê đúng các thông tin còn thiếu để compliant."""
+Chú ý QUAN TRỌNG:
+- Với "answer": Chỉ cần AI có nội dung pháp lý đúng (mức phạt, điều khoản).
+  KHÔNG phạt nếu format khác (dùng header thay bullet, có lời chào đầu...).
+  CHỈ Not compliant nếu AI từ chối hoặc hoàn toàn không trả lời câu hỏi.
+  Việc AI trả lời đầy đủ LUẬT + thêm 1 câu hỏi làm rõ (để tránh nhầm lẫn cho người dùng) là hành vi TỐT và thông minh. KHÔNG ĐƯỢC chấm Not compliant trong trường hợp này.
+  Chỉ phạt "answer" nếu AI không đưa ra được con số/điều khoản mà lại đi hỏi ngược lại khách hàng từ đầu đến cuối.
+- Với "clarify": Bot phải HỎI LẠI. Nếu bot vừa hỏi lại VÀ vừa đưa ra
+  mức phạt tham khảo thì vẫn có thể compliant — miễn là câu hỏi làm rõ
+  được đặt rõ ràng.
+
+Trả lời đúng schema json của evaluator."""
 
 def behavior_compliance(inputs: dict, outputs: dict, reference_outputs: dict) -> bool:
     """
@@ -131,7 +150,9 @@ AI ANSWER: {student_answer}"""
         {"role": "system", "content": BEHAVIOR_PROMPT},
         {"role": "user",   "content": prompt},
     ])
-    return grade["compliant"]
+    if not isinstance(grade, dict):
+        return False
+    return grade.get("compliant", False)
 
 
 # ── Evaluator 3: Groundedness ─────────────────────────────────────────────
@@ -147,9 +168,11 @@ Kiểm tra theo thứ tự:
 (3) Hình phạt bổ sung phải có căn cứ trong FACTS.
 (4) Cho phép diễn giải và tổng hợp từ FACTS miễn là không thêm thông tin pháp lý mới.
 
-Grounded = False nếu phát hiện bất kỳ số tiền hoặc điều khoản nào không có trong FACTS."""
+Grounded = False nếu phát hiện bất kỳ số tiền hoặc điều khoản nào không có trong FACTS.
 
-def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | None:
+Trả lời đúng schema json của evaluator."""
+
+def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | dict:
     """
     Kiểm tra câu trả lời có bị hallucinate so với retrieved context không.
 
@@ -163,10 +186,15 @@ def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) ->
 
     # Skip với refuse và clarify
     if expected_behavior in ("refuse", "clarify"):
-        return SKIP_SENTINEL
+        return _skip_result("groundedness", f"skipped: expected_behavior={expected_behavior}")
 
     grader = grader_llm.with_structured_output(GroundednessGrade, method="json_schema")
-    context = (outputs or {}).get("context", "")
+    context = (
+        (outputs or {}).get("groundedness_context")
+        or (outputs or {}).get("citation_context")
+        or (outputs or {}).get("grading_context")
+        or (outputs or {}).get("context", "")
+    )
     student_answer = (outputs or {}).get("answer", "")
     if not student_answer:
         return False
@@ -178,7 +206,9 @@ def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) ->
         {"role": "system", "content": GROUNDEDNESS_PROMPT},
         {"role": "user",   "content": prompt},
     ])
-    return grade["grounded"]
+    if not isinstance(grade, dict):
+        return False
+    return grade.get("grounded", False)
 
 
 # ── Evaluator 4: Citation Accuracy ───────────────────────────────────────
@@ -196,9 +226,11 @@ Quy tắc:
 
 Citation = False chỉ khi:
 - Cite điều khoản không tồn tại trong CONTEXT.
-- Cite Điều X nhưng gắn với mức phạt của Điều Y."""
+- Cite Điều X nhưng gắn với mức phạt của Điều Y.
 
-def citation_accuracy(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | None:
+Trả lời đúng schema json của evaluator."""
+
+def citation_accuracy(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | dict:
     """
     Kiểm tra tính chính xác của citation điều khoản trong câu trả lời.
 
@@ -213,11 +245,15 @@ def citation_accuracy(inputs: dict, outputs: dict, reference_outputs: dict = Non
 
     # Skip với refuse: Bot không được phép dẫn luật khi từ chối
     if expected_behavior == "refuse":
-        return SKIP_SENTINEL
+        return _skip_result("citation_accuracy", "skipped: expected_behavior=refuse")
 
     # Với clarify và answer: chấm bình thường
     grader = grader_llm.with_structured_output(CitationGrade, method="json_schema")
-    context = (outputs or {}).get("context", "")
+    context = (
+        (outputs or {}).get("citation_context")
+        or (outputs or {}).get("grading_context")
+        or (outputs or {}).get("context", "")
+    )
     student_answer = (outputs or {}).get("answer", "")
     if not student_answer:
         return False
@@ -226,11 +262,13 @@ def citation_accuracy(inputs: dict, outputs: dict, reference_outputs: dict = Non
         {"role": "system", "content": CITATION_PROMPT},
         {"role": "user",   "content": prompt},
     ])
-    return grade["citation_accurate"]
+    if not isinstance(grade, dict):
+        return False
+    return grade.get("citation_accurate", False)
 
 
 # ── Evaluator 5: Retrieval Node Match ────────────────────────────────────
-def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -> float | None:
+def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -> float | dict:
     """
     So sánh node IDs đã retrieve với reference_nodes trong dataset.
 
@@ -250,7 +288,7 @@ def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -
 
     # Skip với refuse: câu OOS không nên bốc được node nào
     if expected_behavior == "refuse":
-        return SKIP_SENTINEL
+        return _skip_result("retrieval_node_match", "skipped: expected_behavior=refuse")
 
     # reference_nodes nằm ở reference_outputs (LangSmith dataset) hoặc inputs (local)
     ref_nodes: list[str] = (
@@ -258,7 +296,11 @@ def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -
         or (inputs or {}).get("reference_nodes")
         or []
     )
-    retrieved_nodes: list[str] = (outputs or {}).get("retrieved_nodes") or []
+    retrieved_nodes: list[str] = (
+        (outputs or {}).get("retrieved_nodes_legal")
+        or (outputs or {}).get("retrieved_nodes")
+        or []
+    )
 
     if not ref_nodes:
         # Dataset không có reference_nodes → skip (trả 1.0 để không kéo thấp tổng)

@@ -6,6 +6,7 @@ import type { Response } from 'express';
 import { PrismaService } from 'prisma/prisma.service';
 import { MessagesService } from '../messages/messages.service';
 import { ConversationsService } from '../conversations/conversations.service';
+import { CloudinaryImage } from '../messages/messages.service';
 import {
   CONVERSATION_TITLE_EVENT,
   ConversationTitleEvent,
@@ -24,7 +25,7 @@ export class ChatService {
     private readonly prisma: PrismaService,
   ) { }
 
-  async askAI(question: string, conversationId: string, res: Response) {
+  async askAI(question: string, conversationId: string, res: Response, image?: CloudinaryImage) {
     let conversation_id = conversationId;
 
     if (!conversation_id) {
@@ -43,10 +44,11 @@ export class ChatService {
       conversationId: conversation_id,
       sender: 'user',
       content: question,
+      image,
     });
 
     // AbortController: huỷ khi client đóng tab hoặc nhấn stop
-    return this._streamFromAI(question, conversation_id, res, userMsg.id);
+    return this._streamFromAI(question, conversation_id, res, userMsg.id, image);
   }
 
   async regenerateMessage(messageId: string, res: Response) {
@@ -67,18 +69,20 @@ export class ChatService {
     // 2. Tìm câu hỏi gốc của user
     const originalQuestionMsg = await this.messageService.getMessageById(parentId);
     const questionText = originalQuestionMsg.content;
+    const metadata: any = originalQuestionMsg.metadata || {};
+    const image = metadata.image;
 
     // 3. Xóa tin nhắn AI bị lỗi (Lưu ý: Bạn cũng cần viết API gọi sang backend Python AI để xóa tin này khỏi memory checkpointer)
     await this.messageService.deleteMessage(messageId);
 
     // Xoá checkpoint trong bộ nhớ LangGraph qua API vừa tạo ở FastAPI
     try {
-      const secret = this.configService.get<string>('X-Internal-Secret');
+      const secret = this.configService.get<string>('INTERNAL_SECRET');
       const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
       const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
 
       await this.httpService.axiosRef.delete(`http://${fastApiUrl}:${fastApiPort}/conversations/${conversationId}/checkpoints`, {
-        headers: { 'X-Internal-Secret': secret },
+        headers: { 'INTERNAL-SECRET': secret },
       });
       this.logger.log(`[regenerate] Đã xóa checkpoint của conversation: ${conversationId}`);
     } catch (err) {
@@ -91,11 +95,11 @@ export class ChatService {
     // Mà trong ngữ cảnh Regenerate, câu hỏi gốc (originalQuestionMsg) VẪN ĐANG NẰM TRONG DB.
 
     // Vì vậy tôi tách luồng Stream logic thành một Helper method bên dưới để bạn tái sử dụng:
-    return this._streamFromAI(questionText, conversationId, res, parentId); // Giữ nguyên parentId để message bot mới map đúng vào.
+    return this._streamFromAI(questionText, conversationId, res, parentId, image); // Truyền cả image nếu có.
   }
 
   // ============== HELPER STREAM AI ==============
-  private async _streamFromAI(question: string, conversation_id: string, res: Response, parentMsgId: string) {
+  private async _streamFromAI(question: string, conversation_id: string, res: Response, parentMsgId: string, image?: CloudinaryImage) {
     const abortController = new AbortController();
     const { signal } = abortController;
     let isAborted = false;
@@ -108,17 +112,21 @@ export class ChatService {
       }
     });
 
-    const secret = this.configService.get<string>('X-Internal-Secret');
+    const secret = this.configService.get<string>('INTERNAL_SECRET');
     const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
     const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
 
     const response = await this.httpService.axiosRef.post(
       `http://${fastApiUrl}:${fastApiPort}/ask/stream`,
-      { question, conversation_id: conversation_id },
+      {
+        question,
+        conversation_id: conversation_id,
+        ...(image ? { image } : {}),
+      },
       {
         responseType: 'stream',
         signal,
-        headers: { 'X-Internal-Secret': secret },
+        headers: { 'INTERNAL-SECRET': secret },
       },
     );
 

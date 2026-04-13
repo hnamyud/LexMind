@@ -32,7 +32,7 @@ export class TitleGeneratorService {
     const { conversationId, userMessage, botMessage } = event;
     this.logger.log(`[TitleGenerator] Bắt đầu sinh tiêu đề cho conv: ${conversationId}`);
 
-    const secret = this.configService.get<string>('X-Internal-Secret');
+    const secret = this.configService.get<string>('INTERNAL_SECRET');
     const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
     const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
 
@@ -44,7 +44,7 @@ export class TitleGeneratorService {
           bot_message: botMessage,
         },
         {
-          headers: { 'X-Internal-Secret': secret },
+          headers: { 'INTERNAL-SECRET': secret },
           // Timeout riêng cho title generation — không cần quá lâu
           timeout: 30_000,
         },
@@ -58,11 +58,12 @@ export class TitleGeneratorService {
 
       await this.conversationsService.updateConversation(conversationId, title);
       this.logger.log(`[TitleGenerator] ✅ Đã cập nhật tiêu đề conv ${conversationId}: "${title}"`);
-    } catch (err) {
+    } catch (err: unknown) {
       // Lỗi này không ảnh hưởng đến trải nghiệm user — chỉ log lại
+      const errorMessage = err instanceof Error ? err.message : String(err);
       this.logger.error(
         `[TitleGenerator] ❌ Lỗi sinh tiêu đề cho conv ${conversationId}:`,
-        err?.message ?? err,
+        errorMessage,
       );
     }
   }

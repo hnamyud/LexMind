@@ -67,5 +67,6 @@ __pycache__/
 venv/
 
 /ai-service/docs
+/ai-service/test
 /backend-core/docs
 /task

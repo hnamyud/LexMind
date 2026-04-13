@@ -6,7 +6,7 @@ import uuid
 from langsmith import traceable
 
 AI_SERVICE_URL = os.getenv("LEXMIND_AI_SERVICE_URL", "http://localhost:8001").rstrip("/")
-INTERNAL_SECRET = os.getenv("X-Internal-Secret") or os.getenv("INTERNAL_SECRET")
+INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
 
 # Regex parse node IDs từ context text (tái sử dụng pattern của RAGService)
 # Header format: "--- Nguồn d7_k7_c (score: 0.85 | hop: 0 | ...) ---"
@@ -14,8 +14,96 @@ _RE_GRAPH_SOURCE = re.compile(
     r"---\s*Nguồn\s+(\S+)\s*\(score:\s*[\d.]+\s*\|[^)]*\)\s*---"
 )
 
+# Whitelist node IDs được phép đưa vào prompt chấm.
+# Hỗ trợ các dạng:
+# - dieu_7
+# - d7_k7
+# - d7_k7_c / d7_k7_a / d50_k1_b
+# - k7_k7_a
+_RE_ALLOWED_GRADING_NODE_ID = re.compile(
+    r"^(?:"
+    r"dieu_\d+"
+    r"|d\d+(?:_k\d+(?:_[\wđ]+)?)?"
+    r"|k\d+_k\d+(?:_[\wđ]+)?"
+    r")$",
+    re.IGNORECASE,
+)
 
-def _extract_retrieved_nodes(context: str) -> list[str]:
+
+def _is_allowed_grading_node_id(node_id: str) -> bool:
+    """Kiểm tra node_id có thuộc nhóm node được phép dùng khi evaluation hay không."""
+    if not node_id:
+        return False
+    return _RE_ALLOWED_GRADING_NODE_ID.match(node_id.strip()) is not None
+
+
+def _iter_context_blocks(context: str) -> list[tuple[str, str]]:
+    """Tách context thành danh sách (node_id, block)."""
+    if not context:
+        return []
+
+    matches = list(_RE_GRAPH_SOURCE.finditer(context))
+    if not matches:
+        return []
+
+    blocks: list[tuple[str, str]] = []
+    for idx, match in enumerate(matches):
+        node_id = match.group(1)
+        start = match.start()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(context)
+        block = context[start:end].strip()
+        if block:
+            blocks.append((node_id, block))
+    return blocks
+
+
+def _strip_graph_relationships(block: str) -> str:
+    """Loại bỏ phần quan hệ đồ thị để giảm nhiễu khi chấm LLM."""
+    if not block:
+        return ""
+
+    marker = "\n  ── Quan hệ đồ thị ──\n"
+    if marker in block:
+        return block.split(marker, 1)[0].rstrip()
+    return block
+
+
+def _build_groundedness_context(context: str) -> str:
+    """
+    Context cho groundedness: giữ TOÀN BỘ block bao gồm cả quan hệ đồ thị.
+    Grader cần thấy mức phạt từ node ⚖️ Hậu quả để verify hallucination.
+    CHỈ cắt các node không phải nguồn gốc pháp lý (action_, hv_, cond_...).
+    """
+    blocks = _iter_context_blocks(context)
+    if not blocks:
+        return context  # fallback raw context
+
+    # Giữ toàn bộ block — KHÔNG strip quan hệ đồ thị
+    return "\n\n".join(block for _, block in blocks)
+
+
+def _build_citation_context(context: str) -> str:
+    """
+    Context cho citation: chỉ giữ node điều/khoản/điểm và cắt phần quan hệ.
+
+    Dùng để kiểm tra trích dẫn điều khoản, tránh nhiễu từ node hành vi/hậu quả.
+    """
+    blocks = _iter_context_blocks(context)
+    if not blocks:
+        return ""
+
+    kept: list[str] = []
+    for node_id, block in blocks:
+        if not _RE_ALLOWED_GRADING_NODE_ID.match(node_id.strip()):
+            continue
+        cleaned = _strip_graph_relationships(block)
+        if cleaned:
+            kept.append(cleaned)
+
+    return "\n\n".join(kept)
+
+
+def _extract_retrieved_nodes(context: str, legal_only: bool = False) -> list[str]:
     """
     Parse danh sách node IDs từ context text trả về bởi graph retriever.
     Trả về list unique, theo thứ tự xuất hiện.
@@ -26,13 +114,15 @@ def _extract_retrieved_nodes(context: str) -> list[str]:
     nodes: list[str] = []
     for m in _RE_GRAPH_SOURCE.finditer(context):
         node_id = m.group(1)
+        if legal_only and not _is_allowed_grading_node_id(node_id):
+            continue
         if node_id not in seen:
             seen.add(node_id)
             nodes.append(node_id)
     return nodes
 
 
-def _extract_retrieved_nodes_from_sources(sources: list[dict]) -> list[str]:
+def _extract_retrieved_nodes_from_sources(sources: list[dict], legal_only: bool = False) -> list[str]:
     """Extract graph node IDs directly from metadata sources list."""
     seen: set[str] = set()
     nodes: list[str] = []
@@ -40,6 +130,8 @@ def _extract_retrieved_nodes_from_sources(sources: list[dict]) -> list[str]:
         if not isinstance(src, dict):
             continue
         node_id = src.get("id") if src.get("type") == "knowledge_graph" else None
+        if legal_only and not _is_allowed_grading_node_id(node_id):
+            continue
         if node_id and node_id not in seen:
             seen.add(node_id)
             nodes.append(node_id)
@@ -58,8 +150,12 @@ async def lexmind_target(inputs: dict) -> dict:
 
     Output (được dùng bởi 5 evaluators):
         answer          : str        — câu trả lời của AI
-        context         : str        — raw text context từ Neo4j (dùng cho groundedness + citation)
-        retrieved_nodes : list[str]  — node IDs đã retrieve (dùng cho retrieval_node_match)
+        context         : str        — raw text context từ Neo4j
+        groundedness_context : str   — context đã cắt quan hệ, giữ toàn bộ node nguồn
+        citation_context: str        — context đã cắt quan hệ, chỉ giữ node điều/khoản/điểm
+        retrieved_nodes_legal : list[str] — node pháp lý dùng cho retrieval_node_match
+        retrieved_nodes_all   : list[str] — toàn bộ node retrieve để debug
+        retrieved_nodes : list[str]  — alias backward-compatible của retrieved_nodes_legal
         verdict         : str        — sufficient | needs_clarification | not_found
         cache_hit       : bool
         node_timings    : dict
@@ -74,7 +170,7 @@ async def lexmind_target(inputs: dict) -> dict:
         async with httpx.AsyncClient(timeout=60.0) as client:
             headers = {}
             if INTERNAL_SECRET:
-                headers["X-Internal-Secret"] = INTERNAL_SECRET
+                headers["INTERNAL-SECRET"] = INTERNAL_SECRET
 
             response = await client.post(
                 f"{AI_SERVICE_URL}/ask/stream",
@@ -100,6 +196,9 @@ async def lexmind_target(inputs: dict) -> dict:
     # Parse NDJSON stream — gom lại toàn bộ events
     answer = ""
     context = ""
+    grading_context = ""
+    groundedness_context = ""
+    citation_context = ""
     verdict = ""
     cache_hit = False
     node_timings = {}
@@ -130,15 +229,27 @@ async def lexmind_target(inputs: dict) -> dict:
         except json.JSONDecodeError:
             continue
 
+    groundedness_context = _build_groundedness_context(context)
+    citation_context = _build_citation_context(context)
+    grading_context = citation_context
+
     # Parse node IDs từ context text để map với reference_nodes trong dataset
-    retrieved_nodes = _extract_retrieved_nodes(context)
-    if not retrieved_nodes:
-        retrieved_nodes = _extract_retrieved_nodes_from_sources(sources)
+    retrieved_nodes_all = _extract_retrieved_nodes(context, legal_only=False)
+    retrieved_nodes_legal = _extract_retrieved_nodes(context, legal_only=True)
+    if not retrieved_nodes_all:
+        retrieved_nodes_all = _extract_retrieved_nodes_from_sources(sources, legal_only=False)
+    if not retrieved_nodes_legal:
+        retrieved_nodes_legal = _extract_retrieved_nodes_from_sources(sources, legal_only=True)
 
     return {
         "answer":          answer,
         "context":         context,          # Raw text — dùng cho groundedness + citation
-        "retrieved_nodes": retrieved_nodes,  # List node IDs — dùng cho retrieval_node_match
+        "groundedness_context": groundedness_context,  # Full nguồn (đã bỏ quan hệ) cho groundedness
+        "citation_context": citation_context,          # Chỉ điều/khoản/điểm cho citation
+        "grading_context": grading_context,            # Backward-compatible alias của citation_context
+        "retrieved_nodes_all": retrieved_nodes_all,      # Toàn bộ node đã retrieve (debug)
+        "retrieved_nodes_legal": retrieved_nodes_legal,  # Node pháp lý để chấm retrieval
+        "retrieved_nodes": retrieved_nodes_legal,        # Backward-compatible field
         "verdict":         verdict,          # sufficient / needs_clarification / not_found
         "cache_hit":       cache_hit,
         "node_timings":    node_timings,

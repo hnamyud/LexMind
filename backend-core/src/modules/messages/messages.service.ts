@@ -2,7 +2,11 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { ConversationsService } from '../conversations/conversations.service';
 import { IUser } from 'src/common/interfaces/users.interface';
-import { ChatService } from '../chat/chat.service';
+
+export type CloudinaryImage = {
+    url: string;
+    public_id: string;
+};
 
 @Injectable()
 export class MessagesService {
@@ -18,7 +22,10 @@ export class MessagesService {
         thought?: string;
         parentId?: string;
         metadata?: any;
+        image?: CloudinaryImage;
     }) {
+        const metadata = this.mergeMetadata(data.metadata, data.image);
+
         return await this.prisma.$transaction([
             this.prisma.message.create({
                 data: {
@@ -27,7 +34,7 @@ export class MessagesService {
                     content: data.content,
                     thought: data.thought,
                     parentId: data.parentId,
-                    metadata: data.metadata,
+                    metadata,
                 },
             }),
             this.prisma.conversation.update({
@@ -86,6 +93,21 @@ export class MessagesService {
         return await this.prisma.message.delete({
             where: { id: messageId },
         });
+    }
+
+    private mergeMetadata(metadata: any, image?: CloudinaryImage) {
+        if (!image) {
+            return metadata;
+        }
+
+        if (metadata && typeof metadata === 'object' && !Array.isArray(metadata)) {
+            return {
+                ...metadata,
+                image,
+            };
+        }
+
+        return { image };
     }
 
     async getMessageById(messageId: string) {

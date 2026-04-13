@@ -16,13 +16,13 @@ export class EvalService {
     const port = this.configService.get<string>('FASTAPI_PORT') || '8001';
     const host = this.configService.get<string>('FASTAPI_URL') || '127.0.0.1';
     this.aiServiceUrl = `http://${host}:${port}`;
-    this.internalSecret = this.configService.get<string>('X-Internal-Secret') || '';
+    this.internalSecret = this.configService.get<string>('INTERNAL_SECRET') || '';
   }
 
   private get headers() {
     return {
       'Content-Type': 'application/json',
-      'X-Internal-Secret': this.internalSecret,
+      'INTERNAL-SECRET': this.internalSecret,
     };
   }
 

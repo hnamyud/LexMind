@@ -480,7 +480,7 @@ async askAI(
       user_id: userId,
     },
     {
-      headers: { 'X-Internal-Secret': X_INTERNAL_SECRET },
+      headers: { 'INTERNAL-SECRET': X_INTERNAL_SECRET },
       responseType: 'stream',
     },
   );
@@ -759,7 +759,7 @@ export class TitleGeneratorService {
           first_question: event.firstQuestion,
         },
         {
-          headers: { 'X-Internal-Secret': X_INTERNAL_SECRET },
+        headers: { 'INTERNAL-SECRET': X_INTERNAL_SECRET },
         },
       ).toPromise();
 

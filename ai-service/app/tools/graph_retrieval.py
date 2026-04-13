@@ -1010,7 +1010,9 @@ class GraphRetrievalTool(BaseTool):
 
             context_blocks.append(block)
 
-        return "\n\n".join(context_blocks)
+        # Present low-score blocks first so the highest-score block is closest
+        # to the user question when context is injected into generator messages.
+        return "\n\n".join(reversed(context_blocks))
 
     # ------------------------------------------------------------------
     # LangChain interface — sync (bắt buộc override)

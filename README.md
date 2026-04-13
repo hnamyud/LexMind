@@ -45,6 +45,7 @@ Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều đi�
 - **Streaming Response**: Trả lời theo thời gian thực qua Server-Sent Events
 - **Survival Rule**: Reflector tự nhận biết vùng xám pháp lý, tránh phán đoán sai
 - **Xác thực đa phương thức**: JWT, Local Auth, Google OAuth, OTP
+- **Xử lý Hình Ảnh (Vision)**: Tối ưu hoá tải lên bằng Stream Pipeline qua Sharp (nén WebP thông minh giữ chi tiết viền) và lưu trữ phi tập trung trên Cloudinary để nhận diện tình huống giao thông.
 - **Auto-title**: Tự động sinh tiêu đề hội thoại bằng AI sau tin nhắn đầu tiên
 - **Feedback Loop**: Like/dislike từng câu trả lời để cải thiện chất lượng
 
@@ -64,11 +65,11 @@ Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều đi�
 │     (Port 8080, /api/v1)      │  │     (Port 8001)              │
 │                               │  │                              │
 │  • Auth (JWT + Google OAuth)  │  │  • LangGraph Agent (ReAct)   │
-│  • Conversation management    │──│  • Neo4j Knowledge Graph     │
-│  • Messages & Feedbacks       │  │  • Web Search (Serper)       │
-│  • User management            │  │  • Firecrawl Web Scraping    │
-│  • Event-driven Background    │  │  • PostgreSQL Checkpointer   │
-│  • Rate Limiting              │  │  • Gemini 3.0 Flash LLM      │
+│  • Quản lý hội thoại & Chat   │──│  • Neo4j Knowledge Graph     │
+│  • File/Image Upload (Stream) │  │  • Web Search (Serper)       │
+│  • Event-driven Background    │  │  • Firecrawl Web Scraping    │
+│  • RAG & LLM checkpointer     │  │  • PostgreSQL Checkpointer   │
+│  • Rate Limiting & Auth       │  │  • Gemini 3.0 Flash & Vision │
 └───────────────┬───────────────┘  └──────────────┬───────────────┘
                 │                                  │
        ┌────────┴────────┐                ┌────────┴────────┐
@@ -106,6 +107,7 @@ Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều đi�
 | Embeddings | [DEk21_hcmute_embedding](https://huggingface.co/huyydangg/DEk21_hcmute_embedding) | 4.1.0 |
 | Web Search | Serper.dev + Firecrawl | Via SDK |
 | State Management | LangGraph AsyncPostgresSaver | 4.0.0 |
+| Image Processing | Sharp + Cloudinary | Latest |
 | Security | Helmet, bcryptjs | 8.1.0 / 2.4.3 |
 
 ---

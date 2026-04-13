@@ -1,5 +1,18 @@
-import { ApiProperty } from "@nestjs/swagger";
-import { IsNotEmpty, IsOptional, IsString, MaxLength, MinLength } from "class-validator";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { Type } from "class-transformer";
+import { IsNotEmpty, IsOptional, IsString, IsUrl, MaxLength, MinLength, ValidateNested } from "class-validator";
+
+export class CloudinaryImageDto {
+    @ApiProperty({ description: 'URL ảnh từ Cloudinary' })
+    @IsString()
+    @IsUrl({ require_protocol: true })
+    url!: string;
+
+    @ApiProperty({ description: 'public_id ảnh từ Cloudinary' })
+    @IsString()
+    @IsNotEmpty()
+    public_id!: string;
+}
 
 export class QuestionDto {
     @ApiProperty()
@@ -7,10 +20,16 @@ export class QuestionDto {
     @IsNotEmpty()
     @MinLength(2)
     @MaxLength(1000)
-    question: string;
+    question!: string;
 
-    @ApiProperty({ required: false })
+    @ApiPropertyOptional()
     @IsString()
     @IsOptional()
-    conversationId: string;
+    conversationId?: string;
+
+    @ApiPropertyOptional({ type: CloudinaryImageDto })
+    @ValidateNested()
+    @Type(() => CloudinaryImageDto)
+    @IsOptional()
+    image?: CloudinaryImageDto;
 }

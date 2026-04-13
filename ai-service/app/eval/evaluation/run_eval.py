@@ -1,6 +1,7 @@
 import asyncio
 import json
 import socket
+import sys
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -67,6 +68,18 @@ def _assert_service_reachable(service_url: str) -> None:
 
 
 client = Client()
+
+
+def _ensure_utf8_console() -> None:
+    """Force UTF-8 console output on Windows to avoid cp1252 encode errors."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
 
 
 def _load_local_dataset(
@@ -219,6 +232,8 @@ def run_evaluation(
     """
     Chạy evaluation từ dữ liệu JSON local sử dụng LangSmith.
     """
+    _ensure_utf8_console()
+
     try:
         from .target import AI_SERVICE_URL
     except ImportError:

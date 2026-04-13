@@ -24,7 +24,11 @@ export class ChatController {
       default: {
         value: {
           question: "Vượt đèn đỏ bị phạt bao nhiêu tiền?",
-          conversationId: "123e4567-e89b-12d3-a456-426614174000"
+          conversationId: "123e4567-e89b-12d3-a456-426614174000",
+          image: {
+            url: "https://res.cloudinary.com/demo/image/upload/v1710000000/violation.jpg",
+            public_id: "demo/violation"
+          }
         }
       }
     }
@@ -32,7 +36,12 @@ export class ChatController {
   async askAI(
     @Body() questionDto: QuestionDto,
     @Res() res: Response) {
-    await this.chatService.askAI(questionDto.question, questionDto.conversationId as string, res);
+    await this.chatService.askAI(
+      questionDto.question,
+      questionDto.conversationId as string,
+      res,
+      questionDto.image,
+    );
   }
 
   @Post('/regenerate/:messageId')
