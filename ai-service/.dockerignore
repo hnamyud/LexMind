@@ -8,3 +8,11 @@ __pycache__/
 logs/
 test/
 .env
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store
+README.md
+LICENSE
+system_overview.md

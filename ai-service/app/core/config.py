@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 # Load .env từ root monorepo (thư mục cha của ai-service)
 ROOT_DIR = Path(__file__).resolve().parents[3]  # ai-service/app/core/config.py -> root
-load_dotenv(dotenv_path=ROOT_DIR / ".env")
+load_dotenv(dotenv_path=ROOT_DIR / ".env", override=False)
 
 
 class Settings:

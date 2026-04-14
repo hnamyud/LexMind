@@ -30,9 +30,14 @@ async def build_checkpointer() -> AsyncPostgresSaver:
     AsyncPostgresSaver
         Checkpointer sẵn sàng dùng với graph.compile(checkpointer=...).
     """
-    # LangGraph AsyncPostgresSaver dùng psycopg (v3) trực tiếp,
-    # nên connection string phải dùng scheme postgresql+psycopg hoặc chỉ postgresql
-    conninfo = settings.DATABASE_URL.replace("postgresql+psycopg://", "postgresql://")
+    # LangGraph AsyncPostgresSaver dùng psycopg (v3) trực tiếp.
+    # - Strip postgresql+psycopg:// → postgresql://
+    # - Bỏ ?pgbouncer=true&connection_limit=1 vì psycopg3 không nhận params đó
+    conninfo = settings.DATABASE_URL \
+        .replace("postgresql+psycopg://", "postgresql://") \
+        .split("?")[0]
+
+
 
     logging.info("⏳ Đang mở async PostgreSQL connection pool...")
     pool = AsyncConnectionPool(

@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.7
+FROM python:3.11-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,6 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 COPY pip_list.json ./pip_list.json
 
@@ -77,10 +81,33 @@ Path("requirements.txt").write_text(
 )
 PY
 
-RUN pip install --upgrade pip \
-    && pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_NO_CACHE_DIR=0 pip install --upgrade pip \
+    && PIP_NO_CACHE_DIR=0 pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
 
-COPY . .
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/tmp/huggingface \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system app && useradd --system --gid app --create-home app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY app ./app
+COPY main.py ./main.py
+
+RUN chown -R app:app /app
+USER app
 
 EXPOSE 8001
 

@@ -19,7 +19,6 @@ import { EvalModule } from './modules/eval/eval.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppThrottlerGuard } from './common/guards/app-throttler.guard';
 import { APP_GUARD } from '@nestjs/core';
-import { CloudinaryModule } from './shared/upload/cloudinary.module';
 
 @Module({
   imports: [
@@ -61,8 +60,7 @@ import { CloudinaryModule } from './shared/upload/cloudinary.module';
     ChatModule,
     RedisModule,
     AdminModule,
-    EvalModule,
-    CloudinaryModule,
+    EvalModule
   ],
   controllers: [AppController],
   providers: [

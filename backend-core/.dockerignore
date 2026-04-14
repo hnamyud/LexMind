@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .git/
+.github/
 .env
 .env.*
 .DS_Store
@@ -8,6 +9,11 @@ coverage/
 *.log
 tmp_drop.ts
 tmp_schema.prisma
+docs-api/
+test/
+*.spec.ts
+README.md
+LICENSE
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

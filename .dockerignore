@@ -1,0 +1,34 @@
+# VCS
+.git/
+.github/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Env and logs
+.env
+.env.*
+logs/
+*.log
+
+# Python artifacts
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.pyo
+*.pyd
+
+# Node artifacts
+node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
+
+# Misc
+tmp/
+*.tmp
