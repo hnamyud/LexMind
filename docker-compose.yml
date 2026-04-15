@@ -34,6 +34,12 @@ services:
       # DATABASE_URL, NEO4J_* → từ .env (cloud)
     ports:
       - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     depends_on:
       redis:
         condition: service_healthy
@@ -65,7 +71,7 @@ services:
       redis:
         condition: service_healthy
       ai-service:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   redis_data:

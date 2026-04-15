@@ -1,5 +1,9 @@
 node_modules/
 dist/
+build/
+out/
+.cache/
+.eslintcache
 .git/
 .github/
 .env
@@ -7,6 +11,8 @@ dist/
 .DS_Store
 coverage/
 *.log
+*.tgz
+*.tar.gz
 tmp_drop.ts
 tmp_schema.prisma
 docs-api/

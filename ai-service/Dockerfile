@@ -38,20 +38,31 @@ skip = {
     "google-ai-generativelanguage",
     # CUDA compiler package captured from local env, not needed for CPU runtime.
     "triton",
-}
-
-# Keep these packages but let pip pick compatible versions across the stack.
-unpin = {
-    "langsmith",
-    "langchain-core",
-    "langgraph",
-    "langgraph-checkpoint",
-    "langgraph-checkpoint-postgres",
+    # Not used by this service and causes resolver conflicts with langchain-core<1.0.
     "langgraph-prebuilt",
+    # Not required for in-process graph execution.
+    "langgraph-sdk",
 }
 
 packages = json.loads(Path("pip_list.json").read_text(encoding="utf-8"))
 lines = []
+
+# Compatibility overrides for the LangChain/LangGraph stack on Python 3.11.
+overrides = {
+    "langchain-core": "0.3.84",
+    "langgraph": "0.6.7",
+    "langgraph-checkpoint": "2.1.2",
+    "langgraph-checkpoint-postgres": "3.0.4",
+    # langchain-community 0.3.24 requires langsmith<0.4.
+    "langsmith": "0.3.45",
+}
+
+# Runtime packages imported by the app that may be missing from pip_list snapshots.
+required_packages = {
+    "langchain-openai",
+    "redis>=5.0.0",
+    "redisvl>=0.3.0",
+}
 
 for pkg in packages:
     name = (pkg.get("name") or "").strip()
@@ -70,13 +81,14 @@ for pkg in packages:
         lines.append("torch==2.6.0+cpu")
         continue
 
-    if lname in unpin:
-        lines.append(name)
-    else:
-        lines.append(f"{name}=={version}" if version else name)
+    if lname in overrides:
+        lines.append(f"{name}=={overrides[lname]}")
+        continue
+
+    lines.append(f"{name}=={version}" if version else name)
 
 Path("requirements.txt").write_text(
-    "\n".join(sorted(set(lines), key=str.lower)) + "\n",
+    "\n".join(sorted(set(lines) | required_packages, key=str.lower)) + "\n",
     encoding="utf-8",
 )
 PY
@@ -110,5 +122,8 @@ RUN chown -R app:app /app
 USER app
 
 EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)" || exit 1
 
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
