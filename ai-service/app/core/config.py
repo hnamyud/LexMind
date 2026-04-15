@@ -23,7 +23,6 @@ class Settings:
     LLM_GENERATOR_L2: str = os.getenv("LLM_GENERATOR_L2") or os.getenv("LLM_GENERATOR", "gemini-3-flash-preview")
     LLM_GENERATOR_L3: str = os.getenv("LLM_GENERATOR_L3") or os.getenv("LLM_GENERATOR", "gemini-3-flash-preview")
     LLM_REFLECTOR: str = os.getenv("LLM_REFLECTOR", "gemini-3-flash-preview")
-    LLM_VISION: str = os.getenv("LLM_VISION", "")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
     EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID")

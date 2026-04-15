@@ -30,6 +30,30 @@ skip = {
     "setuptools",
     "wheel",
     "pyreadline3",  # windows-only helper
+    # Development and notebook-only tooling captured from local env.
+    "pytest",
+    "ipython",
+    "ipython-pygments-lexers",
+    "asttokens",
+    "executing",
+    "stack-data",
+    "pure-eval",
+    "prompt-toolkit",
+    "iniconfig",
+    "pluggy",
+    "pygments",
+    "traitlets",
+    "matplotlib-inline",
+    "jedi",
+    "parso",
+    "pyproject-hooks",
+    "build",
+    # Flask stack is not used by this FastAPI service at runtime.
+    "flask",
+    "flask-cors",
+    "werkzeug",
+    "itsdangerous",
+    "blinker",
     # Unused package that pulls in the legacy google-generativeai stack.
     "generativeai",
     # Legacy package conflicts with langchain-google-genai in this stack.
