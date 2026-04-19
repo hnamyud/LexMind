@@ -24,9 +24,9 @@ from app.core.state import RAGState
 # ---------------------------------------------------------------------------
 
 def _route_after_router(state: RAGState) -> str:
-    """Step 1a → rewrite (legal), direct_answer, hoặc reject."""
+    """Step 1a → rewrite (legal), direct_answer/absurd_logic, hoặc reject."""
     route = state.get("route")
-    if route == "direct_answer":
+    if route in ("direct_answer", "absurd_logic"):
         return "agent_direct"
     if route == "out_of_domain":
         return "agent_reject"
@@ -95,8 +95,8 @@ def build_graph(service):
     """
     Nhận RAGService instance, bind tất cả node methods và compile graph.
 
-    Flow:
-      router → [rewrite | agent_direct | agent_reject]
+        Flow:
+            router → [rewrite | agent_direct | agent_reject]
     rewrite → [cache_check | retriever]
     cache_check → [generator_cached | retriever]
       retriever → reflector → [generator | clarifier | web_search_fallback]

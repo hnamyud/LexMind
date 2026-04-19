@@ -1,19 +1,38 @@
-description: "Router: chỉ phân loại câu hỏi — nhanh, không rewrite"
+router_config:
+  name: "LexMind-Logic-Router"
+  description: "Phân loại 4 hướng: Chặn đứng nghịch lý và tối ưu hóa tài nguyên."
+  
+  prompt_template: |
+    # ROLE:
+    Strict Traffic Law Router (Decree 168/2024/NĐ-CP).
 
-template: |
-  Bạn là router cho chatbot tư vấn Luật Giao thông Việt Nam (Nghị định 168/2024/NĐ-CP).
-  Đọc lịch sử chat và câu hỏi hiện tại, phân loại NGAY vào 1 trong 3 nhóm:
+    # TASK:
+    Classify the user's {question} into EXACTLY ONE route below.
 
-  • "use_tool"      → Câu hỏi về luật giao thông: mức phạt, vi phạm, điều khoản, thủ tục...
-  • "direct_answer" → Chào hỏi, hỏi về chatbot, hỏi chatbot có thể làm gì, cảm ơn, câu hỏi chung không liên quan luật
-  • "out_of_domain" → Hoàn toàn ngoài phạm vi (IT, luật khác, câu vô lý, yêu cầu phi pháp)
+    # ROUTES:
+    1. "use_tool": 
+       - Valid traffic law questions (fines, procedures, regulations).
+       - Context-dependent legal queries.
 
-  QUY TẮC:
-  - Nếu câu hỏi theo ngữ cảnh lịch sử liên quan đến pháp luật giao thông → use_tool
-  - Không chắc → chọn use_tool
-  - "bạn có thể làm gì", "bạn là ai", "giới thiệu về bạn" → direct_answer
+    2. "direct_answer": 
+       - Greetings, bot identity, capabilities, or general thanks.
 
-  OUTPUT (JSON thuần, KHÔNG markdown, KHÔNG giải thích):
-  {{"route": "use_tool" | "direct_answer" | "out_of_domain"}}
+    3. "absurd_logic": 
+       - **Paradoxical Acts:** Legal actions framed as violations (e.g., "running green light", "driving at correct speed").
+       - **Impossible Scenarios:** Logically absurd acts (e.g., "parking on a cloud", "driving under the ocean").
 
-  Câu hỏi: {question}
+    4. "out_of_domain": 
+       - Unrelated domains (IT, cooking, other laws).
+       - Illegal/Unethical: Bribery (hối lộ), evasion (lách luật), hacking.
+
+    # RULES:
+    - If "running green light" (vượt đèn xanh) -> ALWAYS "absurd_logic".
+    - If bribery/illegal acts -> ALWAYS "out_of_domain".
+    - If unsure but traffic-related -> "use_tool".
+
+    # OUTPUT:
+    Return ONLY a raw JSON object. No markdown. No explanation.
+    {"route": "use_tool" | "direct_answer" | "absurd_logic" | "out_of_domain"}
+
+    # INPUT:
+    Question: {question}

@@ -25,7 +25,7 @@ import re
 _REFLECTOR_SCORE_THRESHOLD: float = 0.012
 
 _RE_CONTEXT_SOURCE_HEADER = re.compile(
-    r"^---\s*Nguồn\s+\S+\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---\s*$",
+    r'^<source\s+id="[^"]*"\s+score="([\d.]+)"',
     re.MULTILINE,
 )
 
@@ -34,7 +34,10 @@ _RE_CONTEXT_SOURCE_HEADER = re.compile(
 # Pre-reflector filter
 # ---------------------------------------------------------------------------
 
-def _filter_context_for_reflector(context: str, threshold: float = _REFLECTOR_SCORE_THRESHOLD) -> str:
+
+def _filter_context_for_reflector(
+    context: str, threshold: float = _REFLECTOR_SCORE_THRESHOLD
+) -> str:
     """
     Lọc block context trước khi chuyển sang reflector:
     - Chỉ giữ các block có score >= threshold
@@ -51,6 +54,8 @@ def _filter_context_for_reflector(context: str, threshold: float = _REFLECTOR_SC
     if not headers:
         return context
 
+    # Tách các block theo thẻ <source> ... </source>
+    # Regex mới khớp đầu mỗi block, nên cần tính phạm vi đến đầu block tiếp theo
     kept_blocks: list[str] = []
     total_blocks = len(headers)
 
@@ -92,48 +97,51 @@ def _filter_context_for_reflector(context: str, threshold: float = _REFLECTOR_SC
 # Multi-violation context formatter
 # ---------------------------------------------------------------------------
 
+
 def _format_multi_violation_context(sub_contexts: list[dict]) -> str:
     """
-    Gộp N sub-contexts thành 1 context string có delimiter rõ ràng
+    Gộp N sub-contexts thành 1 context XML có cấu trúc rõ ràng
     để Generator phân biệt dữ liệu từng vi phạm.
     """
     if not sub_contexts:
         return ""
 
     total = len(sub_contexts)
-    SEP = "═" * 60
-
     parts = []
+
     for i, sc in enumerate(sub_contexts, 1):
         label = sc.get("label", f"Vi phạm {i}")
         ctx = sc.get("context", "")
 
-        header = (
-            f"\n{SEP}\n"
-            f"  VI PHẠM {i}/{total}: {label}\n"
-            f"{SEP}"
+        # Escape XML special chars trong label
+        label_esc = (
+            label.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
         )
 
         if ctx and "Không tìm thấy" not in ctx:
-            parts.append(f"{header}\n{ctx}")
+            parts.append(
+                f'  <violation index="{i}" label="{label_esc}">\n'
+                f"{ctx}\n"
+                f"  </violation>"
+            )
         else:
             parts.append(
-                f"{header}\n"
-                f"(Không tìm thấy thông tin cho vi phạm này trong đồ thị tri thức.)"
+                f'  <violation index="{i}" label="{label_esc}">\n'
+                f"    <not_found>Không tìm thấy thông tin cho vi phạm này trong đồ thị tri thức.</not_found>\n"
+                f"  </violation>"
             )
 
-    summary = (
-        f"[MULTI-VIOLATION CONTEXT: {total} vi phạm riêng biệt]\n"
-        f"Mỗi phần 'VI PHẠM X' chứa dữ liệu độc lập — "
-        f"KHÔNG được ghép mức phạt từ vi phạm này sang vi phạm khác.\n"
-    )
-
-    return summary + "\n".join(parts)
+    inner = "\n".join(parts)
+    return f'<multi_violation total="{total}">\n' f"{inner}\n" f"</multi_violation>"
 
 
 # ---------------------------------------------------------------------------
 # Retriever node (Option B — nhận self)
 # ---------------------------------------------------------------------------
+
 
 async def _node_retriever(self, state: dict) -> dict:
     """
@@ -174,8 +182,7 @@ async def _node_retriever(self, state: dict) -> dict:
 
     # ── Multi-violation path (parallel retrieval) ─────────────────
     logging.info(
-        f"[STEP2] Multi-query parallel retrieval: "
-        f"{len(sub_queries)} sub-queries"
+        f"[STEP2] Multi-query parallel retrieval: " f"{len(sub_queries)} sub-queries"
     )
 
     async def _retrieve_one(sq: dict) -> dict:

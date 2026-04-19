@@ -10,7 +10,7 @@ class RAGState(TypedDict):
     messages: Annotated[List[Any], add_messages]
 
     # ── Step 1: Router + Extractor output ────────────────────────────────────
-    route: str             # "use_tool" | "direct_answer" | "out_of_domain"
+    route: str             # "use_tool" | "direct_answer" | "absurd_logic" | "out_of_domain"
     legal_query: str       # thuật ngữ pháp lý đã chuẩn hóa
     entities: dict         # {violation, vehicle_type, subject, conditions[]}
     response_style: str    # "legal" (format cứng, trích dẫn luật) | "natural" (thân thiện)

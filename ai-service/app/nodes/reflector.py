@@ -26,24 +26,30 @@ from .base import _extract_ai_text
 
 # Từ khóa cho thấy context chứa thông tin xử phạt thực sự
 _PENALTY_KEYWORDS: tuple = (
-    "phạt tiền", "triệu đồng", "nghìn đồng",
-    "tước quyền sử dụng giấy phép", "tước bằng",
-    "tạm giữ phương tiện", "tạm giữ xe",
-    "trừ điểm", "điểm giấy phép lái xe",
+    "phạt tiền",
+    "triệu đồng",
+    "nghìn đồng",
+    "tước quyền sử dụng giấy phép",
+    "tước bằng",
+    "tạm giữ phương tiện",
+    "tạm giữ xe",
+    "trừ điểm",
+    "điểm giấy phép lái xe",
     "cảnh cáo",
 )
 
-# Markers xuất hiện khi context thực sự đến từ graph retrieval
+# Markers xuất hiện khi context thực sự đến từ graph retrieval (XML format)
 _RETRIEVAL_MARKERS: tuple = (
-    "--- nguồn", "[multi-violation context", "vi phạm 1/",
-    "nghị định 168/2024/nđ-cp", "═══",
+    "<source ",
+    "<multi_violation",
+    "nghị định 168/2024/nđ-cp",
 )
 
 # Alias loại xe để cover các cách viết khác nhau trong context
 _VEHICLE_ALIASES: dict = {
     "xe máy": ["xe máy", "mô tô", "xe gắn máy", "moto"],
-    "mô tô":  ["xe máy", "mô tô", "xe gắn máy", "moto"],
-    "ô tô":   ["ô tô", "xe ô tô", "xe con", "xe tải", "ô tô con"],
+    "mô tô": ["xe máy", "mô tô", "xe gắn máy", "moto"],
+    "ô tô": ["ô tô", "xe ô tô", "xe con", "xe tải", "ô tô con"],
     "xe tải": ["xe tải", "ô tô tải", "xe chở hàng"],
 }
 
@@ -51,6 +57,7 @@ _VEHICLE_ALIASES: dict = {
 # ---------------------------------------------------------------------------
 # High-confidence pre-check (pure function)
 # ---------------------------------------------------------------------------
+
 
 def _is_high_confidence_context(context: str, entities: dict) -> bool:
     """
@@ -98,6 +105,7 @@ def _is_high_confidence_context(context: str, entities: dict) -> bool:
 # Reflector node (Option B — nhận self)
 # ---------------------------------------------------------------------------
 
+
 async def _node_reflector(self, state: dict) -> dict:
     """
     Step 3: LLM đánh giá context — 3 verdict:
@@ -122,7 +130,11 @@ async def _node_reflector(self, state: dict) -> dict:
             "[STEP3] SKIP Reflector (complexity_level=1 — Simple query). "
             "Trả thẳng 'sufficient' để tiết kiệm latency."
         )
-        return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
+        return {
+            "reflection": "sufficient",
+            "clarification_question": "",
+            "trigger_search": False,
+        }
 
     # ── Level 2/3: Chọn LLM theo level ─────────────────────────────────
     _llm_map = {
@@ -151,16 +163,23 @@ async def _node_reflector(self, state: dict) -> dict:
         )
         # return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
 
-    prompt = self._reflector_prompt.format(
-        question=question,
-        context=context if context else "(Không tìm được dữ liệu từ đồ thị tri thức)",
-        entities=json.dumps(entities, ensure_ascii=False, indent=2),
+    question_text = question
+    context_text = context if context else "(Không tìm được dữ liệu từ đồ thị tri thức)"
+    entities_text = json.dumps(entities, ensure_ascii=False, indent=2)
+
+    # Avoid str.format() because reflector prompts include literal JSON blocks
+    # (e.g. {"verdict": ...}) that can trigger KeyError unexpectedly.
+    prompt = (
+        self._reflector_prompt
+        .replace("{question}", question_text)
+        .replace("{context}", context_text)
+        .replace("{entities}", entities_text)
     )
     try:
         response = await llm_reflector.ainvoke([HumanMessage(content=prompt)])
         raw = _extract_ai_text(response).strip()
-        raw = re.sub(r'^```(?:json)?\s*', '', raw)
-        raw = re.sub(r'\s*```$', '', raw.strip())
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw.strip())
         data = json.loads(raw)
         verdict = data.get("verdict", "sufficient")
         clarification_q = data.get("clarification_question", "")
@@ -177,4 +196,8 @@ async def _node_reflector(self, state: dict) -> dict:
         }
     except Exception as e:
         logging.error(f"[STEP3] Lỗi: {e} — fallback sufficient")
-        return {"reflection": "sufficient", "clarification_question": "", "trigger_search": False}
+        return {
+            "reflection": "sufficient",
+            "clarification_question": "",
+            "trigger_search": False,
+        }

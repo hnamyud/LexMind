@@ -35,17 +35,17 @@ from app.services.cost_calculator import calculate_cost
 # ---------------------------------------------------------------------------
 
 _NODE_STEPS: dict = {
-    "router":              {"step": 1, "label": "🔍 Đang phân loại câu hỏi..."},
-    "rewrite":             {"step": 1, "label": "✍️ Đang chuẩn hóa thuật ngữ pháp lý..."},
-    "cache_check":         {"step": 1, "label": "⚡ Đang kiểm tra cache..."},
-    "retriever":           {"step": 2, "label": "📚 Đang tra cứu đồ thị luật..."},
-    "reflector":           {"step": 3, "label": "🔎 Đang kiểm tra tính đầy đủ..."},
-    "web_search_fallback": {"step": 3, "label": "🌐 Đang tìm kiếm bổ sung trên web..."},
-    "clarifier":           {"step": 3, "label": "❓ Cần làm rõ thêm câu hỏi..."},
-    "generator":           {"step": 4, "label": "✍️ Đang soạn câu trả lời..."},
-    "generator_cached":    {"step": 4, "label": "⚡ Trả lời từ cache..."},
-    "agent_direct":        {"step": 1, "label": "💬 Đang xử lý câu hỏi..."},
-    "agent_reject":        {"step": 1, "label": "🚫 Đang từ chối câu hỏi ngoại lệ..."},
+    "router":              {"step": 1, "label": "Đang phân loại câu hỏi..."},
+    "rewrite":             {"step": 1, "label": "Đang chuẩn hóa thuật ngữ pháp lý..."},
+    "cache_check":         {"step": 1, "label": "Đang kiểm tra cache..."},
+    "retriever":           {"step": 2, "label": "Đang tra cứu đồ thị luật..."},
+    "reflector":           {"step": 3, "label": "Đang kiểm tra tính đầy đủ..."},
+    "web_search_fallback": {"step": 3, "label": "Đang tìm kiếm bổ sung trên web..."},
+    "clarifier":           {"step": 3, "label": "Cần làm rõ thêm câu hỏi..."},
+    "generator":           {"step": 4, "label": "Đang soạn câu trả lời..."},
+    "generator_cached":    {"step": 4, "label": "Trả lời từ cache..."},
+    "agent_direct":        {"step": 1, "label": "Đang xử lý câu hỏi..."},
+    "agent_reject":        {"step": 1, "label": "Đang từ chối câu hỏi ngoại lệ..."},
 }
 
 # Chỉ stream thinking/answer từ các node gọi LLM để sinh câu trả lời cuối
@@ -69,6 +69,21 @@ _NODE_PROCESS_MESSAGES: dict = {
     "agent_reject":        "Từ chối câu hỏi ngoại lệ...",
     "cache_check":         "⚡ Kiểm tra bộ nhớ đệm ngữ nghĩa...",
     "generator_cached":    "⚡ Phản hồi từ bộ nhớ đệm...",
+}
+
+# Stage names ổn định cho frontend (khác tên node nội bộ nếu cần)
+_NODE_STAGE_NAMES: dict = {
+    "router": "route",
+    "rewrite": "rewrite",
+    "cache_check": "cache",
+    "retriever": "retrieval",
+    "reflector": "reflect",
+    "web_search_fallback": "retrieval",
+    "clarifier": "clarify",
+    "generator": "generate",
+    "generator_cached": "generate",
+    "agent_direct": "generate",
+    "agent_reject": "generate",
 }
 
 
@@ -161,7 +176,11 @@ async def ask_stream(
 
                 process_msg = _NODE_PROCESS_MESSAGES.get(evt_name)
                 if process_msg:
-                    yield json.dumps({"type": "process", "content": process_msg}, ensure_ascii=False) + "\n"
+                    stage_name = _NODE_STAGE_NAMES.get(evt_name, evt_name)
+                    yield json.dumps(
+                        {"type": "process", "stage": stage_name, "content": process_msg},
+                        ensure_ascii=False,
+                    ) + "\n"
 
             # ── LLM streaming: chỉ từ generator & agent_direct ──────────
             if evt_type == "on_chat_model_stream" and evt_meta_node in _STREAM_NODES:
@@ -310,7 +329,11 @@ async def ask_stream(
                             if anchors:
                                 for anchor in anchors[:3]:
                                     yield json.dumps(
-                                        {"type": "process", "content": f"📖 Đang tham khảo: {anchor}"},
+                                        {
+                                            "type": "process",
+                                            "stage": "retrieval",
+                                            "content": f"📖 Đang tham khảo: {anchor}",
+                                        },
                                         ensure_ascii=False,
                                     ) + "\n"
                         elif evt_name == "web_search_fallback":

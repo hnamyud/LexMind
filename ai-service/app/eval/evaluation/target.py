@@ -5,14 +5,13 @@ import json
 import uuid
 from langsmith import traceable
 
-AI_SERVICE_URL = os.getenv("LEXMIND_AI_SERVICE_URL", "http://localhost:8001").rstrip("/")
+AI_SERVICE_URL = os.getenv("LEXMIND_AI_SERVICE_URL", "http://localhost:8001").rstrip(
+    "/"
+)
 INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
 
-# Regex parse node IDs từ context text (tái sử dụng pattern của RAGService)
-# Header format: "--- Nguồn d7_k7_c (score: 0.85 | hop: 0 | ...) ---"
-_RE_GRAPH_SOURCE = re.compile(
-    r"---\s*Nguồn\s+(\S+)\s*\(score:\s*[\d.]+\s*\|[^)]*\)\s*---"
-)
+# Regex parse node IDs từ context XML (format: <source id="d7_k7_c" score="0.85" ...>)
+_RE_GRAPH_SOURCE = re.compile(r'<source\s+id="([^"]+)"\s+score="([\d.]+)"')
 
 # Whitelist node IDs được phép đưa vào prompt chấm.
 # Hỗ trợ các dạng:
@@ -21,11 +20,7 @@ _RE_GRAPH_SOURCE = re.compile(
 # - d7_k7_c / d7_k7_a / d50_k1_b
 # - k7_k7_a
 _RE_ALLOWED_GRADING_NODE_ID = re.compile(
-    r"^(?:"
-    r"dieu_\d+"
-    r"|d\d+(?:_k\d+(?:_[\wđ]+)?)?"
-    r"|k\d+_k\d+(?:_[\wđ]+)?"
-    r")$",
+    r"^(?:" r"dieu_\d+" r"|d\d+(?:_k\d+(?:_[\wđ]+)?)?" r"|k\d+_k\d+(?:_[\wđ]+)?" r")$",
     re.IGNORECASE,
 )
 
@@ -38,7 +33,7 @@ def _is_allowed_grading_node_id(node_id: str) -> bool:
 
 
 def _iter_context_blocks(context: str) -> list[tuple[str, str]]:
-    """Tách context thành danh sách (node_id, block)."""
+    """Tách context XML thành danh sách (node_id, block)."""
     if not context:
         return []
 
@@ -49,6 +44,7 @@ def _iter_context_blocks(context: str) -> list[tuple[str, str]]:
     blocks: list[tuple[str, str]] = []
     for idx, match in enumerate(matches):
         node_id = match.group(1)
+        # Block starts at <source tag, ends before next <source tag
         start = match.start()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(context)
         block = context[start:end].strip()
@@ -58,14 +54,18 @@ def _iter_context_blocks(context: str) -> list[tuple[str, str]]:
 
 
 def _strip_graph_relationships(block: str) -> str:
-    """Loại bỏ phần quan hệ đồ thị để giảm nhiễu khi chấm LLM."""
+    """Loại bỏ phần quan hệ đồ thị (<relationships> tag) để giảm nhiễu khi chấm LLM."""
     if not block:
         return ""
 
-    marker = "\n  ── Quan hệ đồ thị ──\n"
-    if marker in block:
-        return block.split(marker, 1)[0].rstrip()
-    return block
+    # Strip XML relationships section
+    import re as _re
+
+    cleaned = _re.sub(r"\s*<relationships>[\s\S]*?</relationships>", "", block)
+    cleaned = cleaned.strip()
+    # Also remove the closing </source> tag for cleanliness
+    cleaned = _re.sub(r"\s*</source>\s*$", "", cleaned).strip()
+    return cleaned if cleaned else block
 
 
 def _build_groundedness_context(context: str) -> str:
@@ -122,7 +122,9 @@ def _extract_retrieved_nodes(context: str, legal_only: bool = False) -> list[str
     return nodes
 
 
-def _extract_retrieved_nodes_from_sources(sources: list[dict], legal_only: bool = False) -> list[str]:
+def _extract_retrieved_nodes_from_sources(
+    sources: list[dict], legal_only: bool = False
+) -> list[str]:
     """Extract graph node IDs directly from metadata sources list."""
     seen: set[str] = set()
     nodes: list[str] = []
@@ -212,19 +214,23 @@ async def lexmind_target(inputs: dict) -> dict:
             if event.get("type") == "answer":
                 answer += event.get("content", "")
             elif event.get("type") == "metadata":
-                payload = event.get("content", {}) if isinstance(event.get("content"), dict) else {}
+                payload = (
+                    event.get("content", {})
+                    if isinstance(event.get("content"), dict)
+                    else {}
+                )
 
                 # New schema (preferred): metadata.content.{...}
-                context      = payload.get("context", context)
-                verdict      = payload.get("reflector_verdict", verdict)
-                cache_hit    = payload.get("cacheHit", cache_hit)
+                context = payload.get("context", context)
+                verdict = payload.get("reflector_verdict", verdict)
+                cache_hit = payload.get("cacheHit", cache_hit)
                 node_timings = payload.get("nodeTimings", node_timings)
-                sources      = payload.get("sources", sources)
+                sources = payload.get("sources", sources)
 
                 # Backward-compat schema: metadata.{...}
-                context      = event.get("context", context)
-                verdict      = event.get("reflector_verdict", verdict)
-                cache_hit    = event.get("cacheHit", cache_hit)
+                context = event.get("context", context)
+                verdict = event.get("reflector_verdict", verdict)
+                cache_hit = event.get("cacheHit", cache_hit)
                 node_timings = event.get("nodeTimings", node_timings)
         except json.JSONDecodeError:
             continue
@@ -237,20 +243,24 @@ async def lexmind_target(inputs: dict) -> dict:
     retrieved_nodes_all = _extract_retrieved_nodes(context, legal_only=False)
     retrieved_nodes_legal = _extract_retrieved_nodes(context, legal_only=True)
     if not retrieved_nodes_all:
-        retrieved_nodes_all = _extract_retrieved_nodes_from_sources(sources, legal_only=False)
+        retrieved_nodes_all = _extract_retrieved_nodes_from_sources(
+            sources, legal_only=False
+        )
     if not retrieved_nodes_legal:
-        retrieved_nodes_legal = _extract_retrieved_nodes_from_sources(sources, legal_only=True)
+        retrieved_nodes_legal = _extract_retrieved_nodes_from_sources(
+            sources, legal_only=True
+        )
 
     return {
-        "answer":          answer,
-        "context":         context,          # Raw text — dùng cho groundedness + citation
+        "answer": answer,
+        "context": context,  # Raw text — dùng cho groundedness + citation
         "groundedness_context": groundedness_context,  # Full nguồn (đã bỏ quan hệ) cho groundedness
-        "citation_context": citation_context,          # Chỉ điều/khoản/điểm cho citation
-        "grading_context": grading_context,            # Backward-compatible alias của citation_context
-        "retrieved_nodes_all": retrieved_nodes_all,      # Toàn bộ node đã retrieve (debug)
+        "citation_context": citation_context,  # Chỉ điều/khoản/điểm cho citation
+        "grading_context": grading_context,  # Backward-compatible alias của citation_context
+        "retrieved_nodes_all": retrieved_nodes_all,  # Toàn bộ node đã retrieve (debug)
         "retrieved_nodes_legal": retrieved_nodes_legal,  # Node pháp lý để chấm retrieval
-        "retrieved_nodes": retrieved_nodes_legal,        # Backward-compatible field
-        "verdict":         verdict,          # sufficient / needs_clarification / not_found
-        "cache_hit":       cache_hit,
-        "node_timings":    node_timings,
+        "retrieved_nodes": retrieved_nodes_legal,  # Backward-compatible field
+        "verdict": verdict,  # sufficient / needs_clarification / not_found
+        "cache_hit": cache_hit,
+        "node_timings": node_timings,
     }

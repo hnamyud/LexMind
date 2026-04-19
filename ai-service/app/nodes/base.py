@@ -46,7 +46,17 @@ def _load_prompt(filename: str) -> str:
     path = _PROMPTS_DIR / filename
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    return data["template"]
+
+    # Legacy schema: {template: "..."}
+    if isinstance(data, dict) and isinstance(data.get("template"), str):
+        return data["template"]
+
+    # Router schema (new): {router_config: {prompt_template: "..."}}
+    router_cfg = data.get("router_config") if isinstance(data, dict) else None
+    if isinstance(router_cfg, dict) and isinstance(router_cfg.get("prompt_template"), str):
+        return router_cfg["prompt_template"]
+
+    raise KeyError(f"Prompt file '{filename}' thiếu key 'template' hoặc 'router_config.prompt_template'.")
 
 
 def _load_skill(filename: str) -> str:

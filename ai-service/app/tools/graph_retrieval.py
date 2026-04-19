@@ -57,7 +57,10 @@ from typing import Optional, Any
 
 import neo4j
 from langchain_core.tools import tool, BaseTool
-from langchain_core.callbacks import CallbackManagerForToolRun, AsyncCallbackManagerForToolRun
+from langchain_core.callbacks import (
+    CallbackManagerForToolRun,
+    AsyncCallbackManagerForToolRun,
+)
 from pydantic import BaseModel, Field
 import re
 from app.core.config import settings
@@ -73,16 +76,16 @@ logger = logging.getLogger(__name__)
 CONSEQUENCE_PATTERNS = {
     "fine_amount": [
         r"phạt\s+(\d+)\s*(triệu|tr|nghìn|ngàn|đồng)",  # "phạt 5 triệu"
-        r"mức\s+phạt\s+(\d+)",                          # "mức phạt 5 triệu"
-        r"(\d+)\s*(triệu|tr|nghìn)\s+(lỗi|vi phạm|phạt)",   # "5 triệu lỗi gì" or "8 triệu phạt lỗi gì"
+        r"mức\s+phạt\s+(\d+)",  # "mức phạt 5 triệu"
+        r"(\d+)\s*(triệu|tr|nghìn)\s+(lỗi|vi phạm|phạt)",  # "5 triệu lỗi gì" or "8 triệu phạt lỗi gì"
     ],
     "license_suspension": [
         r"tước\s+(giấy phép|bằng|gplx)\s+(\d+)\s*(tháng|năm)",  # "tước bằng 3 tháng"
-        r"bị\s+tước\s+bằng",                                     # "bị tước bằng"
+        r"bị\s+tước\s+bằng",  # "bị tước bằng"
     ],
     "points_deduction": [
-        r"trừ\s+(\d+)\s*điểm",                          # "trừ 4 điểm"
-        r"bị\s+trừ\s+điểm",                             # "bị trừ điểm"
+        r"trừ\s+(\d+)\s*điểm",  # "trừ 4 điểm"
+        r"bị\s+trừ\s+điểm",  # "bị trừ điểm"
     ],
 }
 
@@ -132,20 +135,22 @@ def _extract_consequence_keyword(query: str) -> str:
     query_lower = query.lower()
 
     # Priority 1: Extract fine amounts
-    fine_match = re.search(r'(\d+)\s*(triệu|tr)', query_lower)
+    fine_match = re.search(r"(\d+)\s*(triệu|tr)", query_lower)
     if fine_match:
         amount = int(fine_match.group(1))
         return f"Phạt tiền {amount}.000.000 đồng"
 
     # Priority 2: License suspension duration
-    license_match = re.search(r'tước.*(bằng|giấy phép|gplx).*?(\d+)\s*(tháng|năm)', query_lower)
+    license_match = re.search(
+        r"tước.*(bằng|giấy phép|gplx).*?(\d+)\s*(tháng|năm)", query_lower
+    )
     if license_match:
         duration = license_match.group(2)
         unit = license_match.group(3)
         return f"tước quyền sử dụng giấy phép lái xe {duration} {unit}"
 
     # Priority 3: Points deduction
-    points_match = re.search(r'trừ.*?(\d+)\s*điểm', query_lower)
+    points_match = re.search(r"trừ.*?(\d+)\s*điểm", query_lower)
     if points_match:
         points = points_match.group(1).zfill(2)  # "4" → "04"
         return f"trừ điểm giấy phép lái xe {points} điểm"
@@ -160,7 +165,7 @@ def _escape_lucene(text: str) -> str:
         return ""
     # Lucene special chars: + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
     special = r'[+\-&|!(){}\[\]^"~*?:\\/]'
-    return re.sub(special, r'\\\g<0>', text)
+    return re.sub(special, r"\\\g<0>", text)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -180,8 +185,10 @@ VEHICLE_ALIASES = {
 # Input schema
 # ---------------------------------------------------------------------------
 
+
 class GraphRetrievalInput(BaseModel):
     """Schema đầu vào cho GraphRetrievalTool."""
+
     query: str = Field(
         description=(
             "Câu hỏi hoặc thuật ngữ pháp lý cần tra cứu trong cơ sở dữ liệu đồ thị. "
@@ -195,13 +202,14 @@ class GraphRetrievalInput(BaseModel):
             "Entities đã bóc tách từ router: "
             "{violation, vehicle_type, subject, conditions[]}. "
             "Dùng cho graph traversal."
-        )
+        ),
     )
 
 
 # ---------------------------------------------------------------------------
 # Tool class (hỗ trợ cả sync và async)
 # ---------------------------------------------------------------------------
+
 
 class GraphRetrievalTool(BaseTool):
     """
@@ -251,13 +259,17 @@ class GraphRetrievalTool(BaseTool):
     driver: Any = Field(default=None, exclude=True)
     embed_model: Any = Field(default=None, exclude=True)
     top_k: int = Field(default=5)
-    score_threshold: float = Field(default=0.6)  # ngưỡng điểm thấp nhất để chấp nhận kết quả
+    score_threshold: float = Field(
+        default=0.6
+    )  # ngưỡng điểm thấp nhất để chấp nhận kết quả
 
     # ── Timeout configuration (seconds) ───────────────────────────────────
     keyword_timeout: float = Field(default=3.0)  # Fulltext search nhanh, timeout thấp
-    vector_timeout: float = Field(default=5.0)   # Vector search có thể chậm hơn
-    graph_timeout: float = Field(default=5.0)    # Graph traversal có thể phức tạp
-    consequence_timeout: float = Field(default=3.0)  # Consequence-first branch (fast, like keyword)
+    vector_timeout: float = Field(default=5.0)  # Vector search có thể chậm hơn
+    graph_timeout: float = Field(default=5.0)  # Graph traversal có thể phức tạp
+    consequence_timeout: float = Field(
+        default=3.0
+    )  # Consequence-first branch (fast, like keyword)
 
     # ── RRF Threshold configuration ───────────────────────────────────────
     # RRF Score Reference (k=60):
@@ -271,11 +283,11 @@ class GraphRetrievalTool(BaseTool):
     # ── Vehicle-Aware Boosting configuration ──────────────────────────────
     vehicle_boost_enabled: bool = Field(
         default=True,
-        description="Enable vehicle-type aware score boosting for results matching user's vehicle type"
+        description="Enable vehicle-type aware score boosting for results matching user's vehicle type",
     )
     vehicle_boost_multiplier: float = Field(
         default=1.3,
-        description="Score multiplier for vehicle-matching results (recommended: 1.3)"
+        description="Score multiplier for vehicle-matching results (recommended: 1.3)",
     )
 
     # ── Fulltext index state ──────────────────────────────────────────────
@@ -476,20 +488,20 @@ class GraphRetrievalTool(BaseTool):
     # Relationship label → tên tiếng Việt (dùng khi format output)
     # ══════════════════════════════════════════════════════════════════════
     _REL_LABELS = {
-        "QUY_DINH_TAI":        "📋 Quy định tại",
-        "DAN_DEN_HAU_QUA":     "⚖️ Hậu quả / Mức phạt",
+        "QUY_DINH_TAI": "📋 Quy định tại",
+        "DAN_DEN_HAU_QUA": "⚖️ Hậu quả / Mức phạt",
         "DIEU_KIEN_KICH_HOAT": "🔑 Điều kiện kích hoạt",
-        "AP_DUNG_CHO":         "👤 Áp dụng cho",
-        "THAM_CHIEU_DEN":      "🔗 Tham chiếu đến",
-        "TRONG_TRUONG_HOP":    "📌 Trong trường hợp",
-        "DOI_VOI":             "🎯 Đối với",
-        "NHOM_HANH_VI":        "📂 Nhóm hành vi",
-        "THUOC":               "🏷️ Thuộc",
-        "THUC_HIEN":           "✅ Thực hiện",
-        "NGOAI_TRU":           "🚫 Ngoại trừ",
-        "THAY_THE_CHO":        "🔄 Thay thế cho",
-        "UU_TIEN_AP_DUNG":     "⭐ Ưu tiên áp dụng",
-        "VA":                  "➕ Và",
+        "AP_DUNG_CHO": "👤 Áp dụng cho",
+        "THAM_CHIEU_DEN": "🔗 Tham chiếu đến",
+        "TRONG_TRUONG_HOP": "📌 Trong trường hợp",
+        "DOI_VOI": "🎯 Đối với",
+        "NHOM_HANH_VI": "📂 Nhóm hành vi",
+        "THUOC": "🏷️ Thuộc",
+        "THUC_HIEN": "✅ Thực hiện",
+        "NGOAI_TRU": "🚫 Ngoại trừ",
+        "THAY_THE_CHO": "🔄 Thay thế cho",
+        "UU_TIEN_AP_DUNG": "⭐ Ưu tiên áp dụng",
+        "VA": "➕ Và",
     }
 
     # ------------------------------------------------------------------
@@ -503,7 +515,9 @@ class GraphRetrievalTool(BaseTool):
         """Ghi query + context từ Neo4j ra file txt theo ngày."""
         try:
             self._LOG_DIR.mkdir(parents=True, exist_ok=True)
-            log_file = self._LOG_DIR / f"neo4j_query_{datetime.now().strftime('%Y-%m-%d')}.txt"
+            log_file = (
+                self._LOG_DIR / f"neo4j_query_{datetime.now().strftime('%Y-%m-%d')}.txt"
+            )
             sep = "=" * 70
             entry = (
                 f"\n{sep}\n"
@@ -608,7 +622,9 @@ class GraphRetrievalTool(BaseTool):
                     top_k=self.top_k,
                 )
                 records = await result.data()
-                logging.info(f"[Keyword/Fulltext] Tìm được {len(records)} node cho '{keyword[:50]}'")
+                logging.info(
+                    f"[Keyword/Fulltext] Tìm được {len(records)} node cho '{keyword[:50]}'"
+                )
                 return records
         except Exception as e:
             logging.error(f"[Keyword/Fulltext] Lỗi: {e}")
@@ -693,9 +709,7 @@ class GraphRetrievalTool(BaseTool):
     # ------------------------------------------------------------------
     # Nhánh 4: Consequence-First Lookup
     # ------------------------------------------------------------------
-    async def _search_consequence_first(
-        self, query: str, entities: dict
-    ) -> list[dict]:
+    async def _search_consequence_first(self, query: str, entities: dict) -> list[dict]:
         """
         Nhánh 4: Consequence-first lookup.
 
@@ -738,7 +752,9 @@ class GraphRetrievalTool(BaseTool):
                 )
                 records = await result.data()
 
-                logging.info(f"[ConsequenceFirst] Found {len(records)} Action nodes via backward traversal")
+                logging.info(
+                    f"[ConsequenceFirst] Found {len(records)} Action nodes via backward traversal"
+                )
                 return records
 
         except Exception as e:
@@ -783,10 +799,26 @@ class GraphRetrievalTool(BaseTool):
         # ── Bước 1: Build rank positions cho mỗi list ────────────────────────
         # Mỗi node trong mỗi list được gán rank position (1-indexed)
         rank_maps = {
-            "keyword": {r.get("id"): idx + 1 for idx, r in enumerate(keyword_results) if r.get("id")},
-            "vector":  {r.get("id"): idx + 1 for idx, r in enumerate(vector_results) if r.get("id")},
-            "graph":   {r.get("id"): idx + 1 for idx, r in enumerate(graph_results) if r.get("id")},
-            "consequence_first": {r.get("id"): idx + 1 for idx, r in enumerate(consequence_results) if r.get("id")},
+            "keyword": {
+                r.get("id"): idx + 1
+                for idx, r in enumerate(keyword_results)
+                if r.get("id")
+            },
+            "vector": {
+                r.get("id"): idx + 1
+                for idx, r in enumerate(vector_results)
+                if r.get("id")
+            },
+            "graph": {
+                r.get("id"): idx + 1
+                for idx, r in enumerate(graph_results)
+                if r.get("id")
+            },
+            "consequence_first": {
+                r.get("id"): idx + 1
+                for idx, r in enumerate(consequence_results)
+                if r.get("id")
+            },
         }
 
         # ── Bước 2: Build lookup cho full record data ────────────────────────
@@ -870,9 +902,7 @@ class GraphRetrievalTool(BaseTool):
     # Vehicle-Aware Boosting (Post-RRF)
     # ------------------------------------------------------------------
     def _apply_vehicle_boost(
-        self,
-        merged_results: list[dict],
-        entities: dict
+        self, merged_results: list[dict], entities: dict
     ) -> list[dict]:
         """
         Apply vehicle-type aware boosting to RRF scores.
@@ -919,7 +949,9 @@ class GraphRetrievalTool(BaseTool):
                     subject_name = (rel.get("related_name") or "").lower()
 
                     # Check exact match or alias match
-                    for alias in VEHICLE_ALIASES.get(canonical_vehicle, [canonical_vehicle]):
+                    for alias in VEHICLE_ALIASES.get(
+                        canonical_vehicle, [canonical_vehicle]
+                    ):
                         if alias in subject_name:
                             has_matching_vehicle = True
                             break
@@ -943,11 +975,11 @@ class GraphRetrievalTool(BaseTool):
         if boosted_count > 0:
             # Re-sort by boosted scores
             merged_results = sorted(
-                merged_results,
-                key=lambda x: x.get("_rrf_score", 0),
-                reverse=True
+                merged_results, key=lambda x: x.get("_rrf_score", 0), reverse=True
             )
-            logging.info(f"[VehicleBoost] Boosted {boosted_count} results matching vehicle: {canonical_vehicle}")
+            logging.info(
+                f"[VehicleBoost] Boosted {boosted_count} results matching vehicle: {canonical_vehicle}"
+            )
 
         return merged_results
 
@@ -955,60 +987,66 @@ class GraphRetrievalTool(BaseTool):
     # Format context output (enhanced với relationships)
     # ------------------------------------------------------------------
     def _format_context(self, records: list[dict]) -> str:
-        """Format kết quả thành context text cho LLM, bao gồm relationship info."""
+        """Format kết quả thành context XML cho LLM, bao gồm relationship info."""
         if not records:
             return ""
 
+        def _xe(text: str) -> str:
+            """Escape XML special characters."""
+            if not text:
+                return ""
+            return (
+                text.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace('"', "&quot;")
+            )
+
         context_blocks = []
         for r in records:
-            sources = ", ".join(sorted(r.get("_sources", set())))
-            score = r.get("_rrf_score", 0)  # Changed from _weighted_score to _rrf_score
+            sources = ",".join(sorted(r.get("_sources", set())))
+            score = r.get("_rrf_score", 0)
             label = r.get("label", "Unknown")
+            node_id = r.get("id", "")
             name = r.get("name", "")
 
-            # Header block
-            block = f"--- Nguồn {r['id']} (score: {score:.3f} | loại: {label} | từ: {sources}) ---\n"
+            lines = [
+                f'<source id="{_xe(node_id)}" score="{score:.3f}"'
+                f' label="{_xe(label)}" from="{_xe(sources)}">'
+            ]
 
             if name:
-                block += f"Tên: {name}\n"
+                lines.append(f"  <name>{_xe(name)}</name>")
 
             # Nội dung chính
             raw_content = r.get("raw_content") or r.get("text") or ""
             if raw_content:
-                block += f"{raw_content}\n"
+                lines.append(f"  <content>{_xe(raw_content)}</content>")
 
             # Relationships (thông tin liên kết đồ thị)
             relationships = r.get("relationships", [])
-            # Lọc bỏ relationships rỗng (related_id = None)
             valid_rels = [
-                rel for rel in relationships
-                if rel.get("related_id") is not None
+                rel for rel in relationships if rel.get("related_id") is not None
             ]
 
             if valid_rels:
-                block += "\n  ── Quan hệ đồ thị ──\n"
-                # Nhóm theo rel_type
-                grouped: dict[str, list] = {}
+                lines.append("  <relationships>")
                 for rel in valid_rels:
                     rel_type = rel.get("rel_type", "UNKNOWN")
-                    if rel_type not in grouped:
-                        grouped[rel_type] = []
-                    grouped[rel_type].append(rel)
+                    rel_id = rel.get("related_id", "")
+                    rel_text = (
+                        rel.get("related_text", "") or rel.get("related_name", "") or ""
+                    )
+                    if len(rel_text) > 500:
+                        rel_text = rel_text[:500] + "..."
+                    lines.append(
+                        f'    <rel type="{_xe(rel_type)}" id="{_xe(rel_id)}">'
+                        f"{_xe(rel_text)}</rel>"
+                    )
+                lines.append("  </relationships>")
 
-                for rel_type, rels in grouped.items():
-                    label_vi = self._REL_LABELS.get(rel_type, f"🔹 {rel_type}")
-                    block += f"  {label_vi}:\n"
-                    for rel in rels:
-                        rel_name = rel.get("related_name", "")
-                        rel_text = rel.get("related_text", "")
-                        if rel_text:
-                            # Giới hạn text ngắn gọn
-                            snippet = rel_text[:500] + "..." if len(rel_text) > 500 else rel_text
-                            block += f"    • [{rel.get('related_id', '')}] {rel_name}: {snippet}\n"
-                        elif rel_name:
-                            block += f"    • [{rel.get('related_id', '')}] {rel_name}\n"
-
-            context_blocks.append(block)
+            lines.append("</source>")
+            context_blocks.append("\n".join(lines))
 
         # Present low-score blocks first so the highest-score block is closest
         # to the user question when context is injected into generator messages.
@@ -1030,6 +1068,7 @@ class GraphRetrievalTool(BaseTool):
             if loop.is_running():
                 # Đang trong async context → chạy coroutine trực tiếp
                 import concurrent.futures
+
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     future = pool.submit(asyncio.run, self._arun(query, entities))
                     return future.result()
@@ -1105,31 +1144,27 @@ class GraphRetrievalTool(BaseTool):
 
             # Tạo tasks với timeout guards (4 nhánh)
             keyword_task = search_with_timeout(
-                self._search_keyword(query),
-                self.keyword_timeout,
-                "Keyword"
+                self._search_keyword(query), self.keyword_timeout, "Keyword"
             )
             vector_task = search_with_timeout(
-                self._search_vector(vector),
-                self.vector_timeout,
-                "Vector"
+                self._search_vector(vector), self.vector_timeout, "Vector"
             )
             graph_task = search_with_timeout(
-                self._search_graph(entities),
-                self.graph_timeout,
-                "Graph"
+                self._search_graph(entities), self.graph_timeout, "Graph"
             )
             consequence_task = search_with_timeout(
                 self._search_consequence_first(query, entities),
                 self.consequence_timeout,
-                "ConsequenceFirst"
+                "ConsequenceFirst",
             )
 
-            keyword_results, vector_results, graph_results, consequence_results = await asyncio.gather(
-                keyword_task,
-                vector_task,
-                graph_task,
-                consequence_task,  # 4th branch
+            keyword_results, vector_results, graph_results, consequence_results = (
+                await asyncio.gather(
+                    keyword_task,
+                    vector_task,
+                    graph_task,
+                    consequence_task,  # 4th branch
+                )
             )
 
             logging.info(
@@ -1196,6 +1231,7 @@ class GraphRetrievalTool(BaseTool):
 # Factory function — cách khởi tạo được khuyến nghị
 # ---------------------------------------------------------------------------
 
+
 def make_graph_retrieval_tool(
     driver: Any,
     embed_model: Any,
@@ -1204,10 +1240,10 @@ def make_graph_retrieval_tool(
     keyword_timeout: float = 3.0,
     vector_timeout: float = 5.0,
     graph_timeout: float = 5.0,
-    consequence_timeout: float = 3.0,      # NEW
+    consequence_timeout: float = 3.0,  # NEW
     rrf_threshold: float = 0.016,
-    vehicle_boost_enabled: bool = True,    # NEW
-    vehicle_boost_multiplier: float = 1.3, # NEW
+    vehicle_boost_enabled: bool = True,  # NEW
+    vehicle_boost_multiplier: float = 1.3,  # NEW
 ) -> GraphRetrievalTool:
     """
     Tạo và trả về instance của GraphRetrievalTool.

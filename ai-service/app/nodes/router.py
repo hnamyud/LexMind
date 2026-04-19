@@ -1,10 +1,11 @@
 """
 nodes/router.py
 ───────────────
-Step 1a — Router: phân loại nhanh câu hỏi vào 3 nhóm:
-  - use_tool       → câu hỏi pháp lý → đi _node_rewrite
-  - direct_answer  → chào hỏi, hỏi về chatbot → đi thẳng agent_direct
-  - out_of_domain  → ngoài phạm vi → đi agent_reject
+Step 1a — Router: phân loại nhanh câu hỏi vào 4 nhóm:
+    - use_tool       → câu hỏi pháp lý → đi _node_rewrite
+    - direct_answer  → chào hỏi, hỏi về chatbot → đi thẳng agent_direct
+    - absurd_logic   → tình huống phi logic/không phải vi phạm → đi agent_direct (natural)
+    - out_of_domain  → ngoài phạm vi → đi agent_reject
 
 Option B: hàm nhận `self` (RAGService instance) làm tham số đầu tiên.
 RAGService sẽ bind: self._node_router = types.MethodType(_node_router, self)
@@ -23,9 +24,10 @@ from .base import _extract_ai_text
 
 async def _node_router(self, state: dict, config: RunnableConfig | None = None) -> dict:
     """
-    Step 1a: Phân loại câu hỏi vào 3 nhóm:
+        Step 1a: Phân loại câu hỏi vào 4 nhóm:
       - use_tool       → câu hỏi luật giao thông → đi _node_rewrite
       - direct_answer  → chào hỏi, hỏi về chatbot → đi thẳng agent_direct
+            - absurd_logic   → tình huống phi logic/không phải vi phạm → đi agent_direct
       - out_of_domain  → ngoài phạm vi → đi agent_reject
 
     Dùng _llm_router và prompt cực ngắn — không rewrite, không extract entities.
@@ -76,7 +78,9 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
     history_text = "\n".join([_fmt_msg(m) for m in recent_msgs])
     question = f"--- Lịch sử chat gần đây ---\n{history_text}\n--- Câu hỏi hiện tại ---\nUser: {last_question}"
 
-    prompt = self._router_classify_prompt.format(question=question)
+    # Avoid str.format() here because prompt templates include JSON examples
+    # (e.g. {"route": ...}) that can accidentally trigger KeyError.
+    prompt = self._router_classify_prompt.replace("{question}", question)
 
     # Hard timeout: align với LLM timeout=25s + 5s buffer
     # LLM timeout fires first với proper error → asyncio.TimeoutError là last resort
@@ -92,6 +96,10 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         raw = re.sub(r'\s*```$', '', raw.strip())
         data = json.loads(raw)
         route = data.get("route", "use_tool")
+        allowed_routes = {"use_tool", "direct_answer", "absurd_logic", "out_of_domain"}
+        if route not in allowed_routes:
+            logging.warning(f"[STEP1a] route không hợp lệ: {route!r} — fallback use_tool")
+            route = "use_tool"
         response_style = "legal" if route == "use_tool" else "natural"
 
         logging.info(f"[STEP1a] route={route!r}, style={response_style!r}")

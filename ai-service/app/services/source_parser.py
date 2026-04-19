@@ -16,9 +16,7 @@ import re
 # Regex patterns
 # ---------------------------------------------------------------------------
 
-_RE_GRAPH_SOURCE = re.compile(
-    r"---\s*Nguồn\s+(\S+)\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---"
-)
+_RE_GRAPH_SOURCE = re.compile(r'<source\s+id="([^"]+)"\s+score="([\d.]+)"')
 _RE_WEB_URL = re.compile(r"^URL\s*:\s*(https?://\S+)", re.MULTILINE)
 
 # Nhận diện các chuỗi chứa "Điều", "Khoản", "Điểm" (có thể độc lập hoặc kết hợp)
@@ -39,6 +37,7 @@ _RE_ENTITY_ID = re.compile(
 # Source parsers
 # ---------------------------------------------------------------------------
 
+
 def parse_legal_anchors(context: str) -> list[str]:
     """
     Parse nhanh các anchor pháp lý (Điều/Khoản/Điểm) từ context trả về bởi retriever.
@@ -52,7 +51,7 @@ def parse_legal_anchors(context: str) -> list[str]:
     if not context or "Không tìm thấy" in context:
         return []
 
-    # Tách context thành các block bằng header chứa score
+    # Tách context thành các block theo thẻ <source>
     headers = list(_RE_GRAPH_SOURCE.finditer(context))
     valid_context_text = context
 
@@ -62,7 +61,7 @@ def parse_legal_anchors(context: str) -> list[str]:
         except ValueError:
             max_score = 0.0
 
-        threshold = max_score * 0.5  # Giảm từ 0.75 → 0.5 để bắt được nhiều anchors hơn
+        threshold = max_score * 0.5
         kept_blocks = []
 
         for i, match in enumerate(headers):
@@ -72,8 +71,11 @@ def parse_legal_anchors(context: str) -> list[str]:
                 score = 0.0
 
             if score >= threshold:
-                start_idx = match.end()
-                end_idx = headers[i + 1].start() if i + 1 < len(headers) else len(context)
+                # block starts at the <source tag, ends before next <source tag
+                start_idx = match.start()
+                end_idx = (
+                    headers[i + 1].start() if i + 1 < len(headers) else len(context)
+                )
                 kept_blocks.append(context[start_idx:end_idx])
 
         if kept_blocks:
@@ -106,7 +108,9 @@ def parse_legal_anchors(context: str) -> list[str]:
     # 2. Parse text anchors (Điều X, Khoản Y, Điểm Z, v.v.)
     for m in _RE_DIEU_KHOAN.finditer(valid_context_text):
         token = m.group(0).strip()
-        token_clean = re.sub(r'(điểm|khoản|điều|mục)', capitalize_kw, token, flags=re.IGNORECASE)
+        token_clean = re.sub(
+            r"(điểm|khoản|điều|mục)", capitalize_kw, token, flags=re.IGNORECASE
+        )
 
         key = token_clean.lower()
         if key not in seen and "Điều này" not in token_clean:
@@ -117,7 +121,7 @@ def parse_legal_anchors(context: str) -> list[str]:
 
 
 def extract_graph_sources(context: str) -> list[dict]:
-    """Trích xuất nguồn từ Neo4j graph retrieval results."""
+    """Trích xuất nguồn từ Neo4j graph retrieval results (XML format)."""
     return [
         {"type": "knowledge_graph", "id": m.group(1), "score": float(m.group(2))}
         for m in _RE_GRAPH_SOURCE.finditer(context)
@@ -126,7 +130,4 @@ def extract_graph_sources(context: str) -> list[dict]:
 
 def extract_web_sources(context: str) -> list[dict]:
     """Trích xuất URL nguồn từ web search results."""
-    return [
-        {"type": "web", "url": m.group(1)}
-        for m in _RE_WEB_URL.finditer(context)
-    ]
+    return [{"type": "web", "url": m.group(1)} for m in _RE_WEB_URL.finditer(context)]

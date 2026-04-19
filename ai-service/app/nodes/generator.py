@@ -33,9 +33,7 @@ async def _node_generator(self, state: dict) -> dict:
     }
     llm = _llm_gen_map.get(complexity_level, self._llm_gen_l2)
     _model_name = getattr(llm, "model", None) or getattr(llm, "model_name", "unknown")
-    logging.info(
-        f"[STEP4] Generator L{complexity_level} → model={_model_name!r}"
-    )
+    logging.info(f"[STEP4] Generator L{complexity_level} → model={_model_name!r}")
 
     messages = list(state.get("messages", []))
     context = state.get("context", "")
@@ -68,17 +66,18 @@ async def _node_generator(self, state: dict) -> dict:
         messages_to_llm = messages_to_llm + [
             SystemMessage(
                 content=(
-                    "[RETRIEVED_CONTEXT]\n"
+                    "<retrieved_context>\n"
+                    "  <instructions>\n"
+                    "    <rule>Mỗi tag &lt;source&gt; chứa một anchor duy nhất. Chỉ trích dẫn số Điều/Khoản nếu nó xuất hiện TƯỜNG MINH trong thuộc tính id của tag đó.</rule>\n"
+                    "    <rule>TUYỆT ĐỐI KHÔNG ghép số Điều từ source này với mức phạt từ source khác.</rule>\n"
+                    "    <rule>TUYỆT ĐỐI KHÔNG dùng kiến thức ngoài context để suy ra số Điều/Khoản.</rule>\n"
+                    "    <rule>Nếu không tìm thấy điều/khoản rõ ràng trong id, chỉ mô tả mức phạt, không ghi số Điều/Khoản.</rule>\n"
+                    "    <rule>Nếu context là &lt;multi_violation&gt;: mỗi &lt;violation&gt; là nguồn dữ liệu riêng biệt. Xử lý từng phần và tổng hợp cộng dồn cuối cùng.</rule>\n"
+                    "  </instructions>\n"
+                    "  <sources>\n"
                     f"{context}\n"
-                    "[/RETRIEVED_CONTEXT]\n\n"
-                    "HƯỚNG DẪN SỬ DỤNG CONTEXT:\n"
-                    "1. Mỗi block bắt đầu bằng '═══ [Điều X, Khoản Y...] ═══' là một anchor duy nhất.\n"
-                    "   → Chỉ trích dẫn số Điều/Khoản nếu nó xuất hiện TƯỜNG MINH trong header '═══' đó.\n"
-                    "2. TUYỆT ĐỐI KHÔNG ghép số Điều từ block này với mức phạt từ block khác.\n"
-                    "3. TUYỆT ĐỐI KHÔNG dùng kiến thức ngoài context để suy ra số Điều/Khoản.\n"
-                    "4. Nếu không tìm thấy header '═══' → không ghi Điều/Khoản, chỉ mô tả mức phạt.\n"
-                    "5. Nếu context bắt đầu bằng '[MULTI-VIOLATION CONTEXT]': mỗi phần 'VI PHẠM X' "
-                    "là nguồn dữ liệu riêng biệt. Xử lý từng phần và tổng hợp cộng dồn cuối cùng.\n"
+                    "  </sources>\n"
+                    "</retrieved_context>"
                 )
             )
         ]
@@ -86,8 +85,7 @@ async def _node_generator(self, state: dict) -> dict:
     # Inject skill 02 + 03 cho legal flow để bổ sung hướng dẫn đọc graph và kiểm toán trích dẫn
     if style == "legal":
         skill_parts = [
-            s for s in [self._skill_graph_analyzer, self._skill_citation_validator]
-            if s
+            s for s in [self._skill_graph_analyzer, self._skill_citation_validator] if s
         ]
         if skill_parts:
             messages_to_llm = messages_to_llm + [
@@ -99,4 +97,8 @@ async def _node_generator(self, state: dict) -> dict:
         return {"messages": [response]}
     except Exception as e:
         logging.error(f"[STEP4] Lỗi: {e}")
-        return {"messages": [AIMessage(content=f"Xin lỗi, đã xảy ra lỗi khi soạn câu trả lời: {e}")]}
+        return {
+            "messages": [
+                AIMessage(content=f"Xin lỗi, đã xảy ra lỗi khi soạn câu trả lời: {e}")
+            ]
+        }

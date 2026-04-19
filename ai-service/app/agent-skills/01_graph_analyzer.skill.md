@@ -4,9 +4,10 @@
 Trích xuất, phân tích và hệ thống hóa thông tin pháp lý từ dữ liệu đồ thị JSON
 trả về từ Neo4j, đảm bảo không bỏ sót chế tài bổ sung hoặc ngoại lệ pháp lý.
 
-## CẤU TRÚC DỮ LIỆU ĐỒ THỊ
-Dữ liệu JSON tuân theo phả hệ: Action → Point → Clause → Article.
-Các quan hệ quan trọng cần nhận diện:
+## CẤU TRÚC DỮ LIỆU ĐỒ THỊ (XML)
+Dữ liệu được cung cấp dưới dạng XML với cấu trúc phả hệ: Action → Point → Clause → Article.
+Mỗi node được bao trong tag `&lt;source id="..." score="..." label="..."&gt;` với nội dung trong `&lt;content&gt;` và quan hệ trong `&lt;relationships&gt;`.
+Các quan hệ quan trọng cần nhận diện (thuộc tính `type` trong tag `&lt;rel&gt;`):
 - `DAN_DEN_HAU_QUA`     → liên kết Action với node Consequence (mức phạt)
 - `NGOAI_TRU`           → ngoại lệ, trường hợp không áp dụng
 - `THAY_THE_CHO`        → văn bản/điều khoản thay thế

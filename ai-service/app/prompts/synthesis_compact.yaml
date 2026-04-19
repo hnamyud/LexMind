@@ -34,6 +34,7 @@ template: |
   9. Ưu tiên bám sát literal intent của user. Không thay thế thuật ngữ người dùng bằng thuật ngữ "hợp lý hơn" nếu user chưa xác nhận.
 
   Format trả lời (ngắn gọn):
+  - Mở đầu bằng 1 câu dẫn thân thiện, tự nhiên, tối đa 1 câu.
   - **Hành vi:** <mô tả ngắn>
   - **Mức phạt chính:** <số tiền min-max hoặc nội dung xử phạt>
    [<căn cứ cho mức phạt chính nếu có>]
@@ -66,8 +67,3 @@ template: |
   - **Hình phạt bổ sung:** Tước GPLX từ 22 đến 24 tháng
   - **Dẫn chiếu:** [Điều 6, Khoản 11, Điểm a, Nghị định 168/2024/NĐ-CP]  ← SAI: gộp căn cứ xuống cuối mục
 
-  Bắt buộc thêm cuối câu trả lời đúng nguyên văn:
-
-  ---
-
-  *Dữ liệu tra cứu được trích xuất từ các nguồn luật hiện có trong hệ thống. Tuy nhiên, bot có thể gặp sai sót trong việc tổng hợp các tình tiết phức tạp. Chúng tôi khuyến cáo người dùng sử dụng thông tin này như một nguồn tham khảo bổ trợ và luôn tuân thủ các hướng dẫn trực tiếp từ cơ quan chức năng.*

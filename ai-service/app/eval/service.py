@@ -25,22 +25,20 @@ from typing import Optional
 
 from langchain_core.messages import HumanMessage, AIMessage
 
-# Regex tái sử dụng từ RAGService (không import class để tránh circular)
-_RE_GRAPH_SOURCE = re.compile(
-    r"---\s*Nguồn\s+(\S+)\s*\(score:\s*([\d.]+)\s*\|[^)]*\)\s*---"
-)
+# Regex parse node IDs từ context XML (format: <source id="d7_k7_c" score="0.85" ...>)
+_RE_GRAPH_SOURCE = re.compile(r'<source\s+id="([^"]+)"\s+score="([\d.]+)"')
 
 _DATASET_DIR = Path(__file__).parent.parent.parent / "test" / "dataset"
 
 VALID_ISSUES = {
-    "wrong_amount",       # Mức phạt tiền/điểm sai
-    "missing_article",    # Thiếu căn cứ Điều/Khoản
-    "hallucination",      # Bot bịa ra điều không có trong luật
-    "wrong_vehicle_type", # Nhầm loại xe
-    "should_refuse",      # Phải từ chối nhưng không từ chối
-    "incomplete",         # Đúng nhưng thiếu một phần
-    "wrong_behavior",     # expected_behavior không khớp
-    "over_retrieved",     # Lấy quá nhiều nodes không liên quan
+    "wrong_amount",  # Mức phạt tiền/điểm sai
+    "missing_article",  # Thiếu căn cứ Điều/Khoản
+    "hallucination",  # Bot bịa ra điều không có trong luật
+    "wrong_vehicle_type",  # Nhầm loại xe
+    "should_refuse",  # Phải từ chối nhưng không từ chối
+    "incomplete",  # Đúng nhưng thiếu một phần
+    "wrong_behavior",  # expected_behavior không khớp
+    "over_retrieved",  # Lấy quá nhiều nodes không liên quan
 }
 
 
@@ -107,7 +105,13 @@ class EvalService:
 
         raw_results = run_result.get("results")
         if raw_results is not None:
-            for attr in ("url", "experiment_url", "session_url", "project_url", "results_url"):
+            for attr in (
+                "url",
+                "experiment_url",
+                "session_url",
+                "project_url",
+                "results_url",
+            ):
                 value = getattr(raw_results, attr, None)
                 if isinstance(value, str) and value.strip().startswith("http"):
                     return value.strip()
@@ -175,8 +179,7 @@ class EvalService:
 
         if source_doc:
             all_samples = [
-                s for s in all_samples
-                if source_doc in (s.get("source_docs") or [])
+                s for s in all_samples if source_doc in (s.get("source_docs") or [])
             ]
             if not all_samples:
                 raise ValueError(
@@ -188,7 +191,9 @@ class EvalService:
             id_set = set(question_ids)
             samples = [s for s in all_samples if s.get("id") in id_set]
             if not samples:
-                raise ValueError(f"Không tìm thấy câu nào khớp question_ids: {question_ids}")
+                raise ValueError(
+                    f"Không tìm thấy câu nào khớp question_ids: {question_ids}"
+                )
             logging.info(
                 f"[Eval] Filter by question_ids={question_ids} → {len(samples)} câu"
             )
@@ -289,6 +294,7 @@ class EvalService:
 
         def _run():
             from app.eval.evaluation.run_eval import run_evaluation
+
             return run_evaluation(
                 dataset_name=dataset_filename,
                 experiment_prefix=experiment_prefix,
@@ -306,7 +312,9 @@ class EvalService:
             final_status = "failed"
 
         # ── Sync kết quả LangSmith → eval_runs ────────────────────────────
-        run_records: list[dict] = run_result.get("run_records", []) if isinstance(run_result, dict) else []
+        run_records: list[dict] = (
+            run_result.get("run_records", []) if isinstance(run_result, dict) else []
+        )
         if run_records:
             await self._persist_run_records(session_id, run_records)
 
@@ -399,17 +407,21 @@ class EvalService:
                             rec.get("question_id", ""),
                             rec.get("question", ""),
                             rec.get("ground_truth", ""),
-                            json.dumps(rec.get("reference_nodes", []), ensure_ascii=False),
-                            json.dumps(rec.get("retrieved_nodes", []), ensure_ascii=False),
+                            json.dumps(
+                                rec.get("reference_nodes", []), ensure_ascii=False
+                            ),
+                            json.dumps(
+                                rec.get("retrieved_nodes", []), ensure_ascii=False
+                            ),
                             rec.get("ai_answer", ""),
                             rec.get("context_text", ""),
                             rec.get("question_type", ""),
                             rec.get("expected_behavior", ""),
-                            rec.get("score_correctness"),    # BOOLEAN
-                            rec.get("score_groundedness"),   # BOOLEAN
+                            rec.get("score_correctness"),  # BOOLEAN
+                            rec.get("score_groundedness"),  # BOOLEAN
                             score_behavior_value,
-                            rec.get("score_citation"),       # BOOLEAN
-                            rec.get("retrieval_hit_rate"),   # FLOAT
+                            rec.get("score_citation"),  # BOOLEAN
+                            rec.get("retrieval_hit_rate"),  # FLOAT
                         ),
                     )
 
@@ -418,11 +430,6 @@ class EvalService:
             )
         except Exception as e:
             logging.error(f"[Eval] ❌ Failed to persist run_records: {e}")
-
-
-
-
-
 
     async def _run_samples(
         self, session_id: str, samples: list[dict], concurrency: int
@@ -462,11 +469,14 @@ class EvalService:
                         )
                         """,
                         (
-                            run_id, session_id,
+                            run_id,
+                            session_id,
                             sample.get("id"),
                             question,
                             sample.get("ground_truth", ""),
-                            json.dumps(sample.get("reference_nodes", []), ensure_ascii=False),
+                            json.dumps(
+                                sample.get("reference_nodes", []), ensure_ascii=False
+                            ),
                             json.dumps(retrieved_nodes, ensure_ascii=False),
                             ai_answer,
                             context,
@@ -513,7 +523,7 @@ class EvalService:
             "configurable": {
                 "thread_id": f"eval_{uuid.uuid4().hex}",  # thread riêng, không tái sử dụng
                 "enable_web_search": False,  # tắt web search khi eval
-                "enable_cache": False,        # tắt semantic cache khi eval
+                "enable_cache": False,  # tắt semantic cache khi eval
             },
             "run_name": f"eval — {question[:40]}",
         }
@@ -546,14 +556,25 @@ class EvalService:
         if not row:
             return None
         cols = [
-            "id", "dataset", "source_doc", "project_name", "experiment_id",
-            "created_at", "status", "total", "completed", "langsmith_url",
+            "id",
+            "dataset",
+            "source_doc",
+            "project_name",
+            "experiment_id",
+            "created_at",
+            "status",
+            "total",
+            "completed",
+            "langsmith_url",
         ]
         session = dict(zip(cols, row))
-        session["created_at"] = session["created_at"].isoformat() if session["created_at"] else None
+        session["created_at"] = (
+            session["created_at"].isoformat() if session["created_at"] else None
+        )
         session["progress_pct"] = (
             round(session["completed"] / session["total"] * 100, 1)
-            if session["total"] > 0 else 0
+            if session["total"] > 0
+            else 0
         )
         return session
 
@@ -604,14 +625,16 @@ class EvalService:
             # retrieval_hit_rate: đã là float từ LangSmith, nhân 100 để hiển thị %
             hit_rate_raw = run.get("retrieval_hit_rate")
             run["retrieval_hit_rate_pct"] = (
-                round(float(hit_rate_raw) * 100, 1) if hit_rate_raw is not None else None
+                round(float(hit_rate_raw) * 100, 1)
+                if hit_rate_raw is not None
+                else None
             )
 
             # Thiếu/thừa nodes (thiếu u lại từ reference và retrieved)
-            ref      = set(run.get("reference_nodes") or [])
+            ref = set(run.get("reference_nodes") or [])
             retrieved = set(run.get("retrieved_nodes") or [])
             run["retrieval_missing"] = sorted(ref - retrieved)
-            run["retrieval_extra"]   = sorted(retrieved - ref)
+            run["retrieval_extra"] = sorted(retrieved - ref)
 
             results.append(run)
 
@@ -644,8 +667,7 @@ class EvalService:
             if s.get("created_at"):
                 s["created_at"] = s["created_at"].isoformat()
             s["progress_pct"] = (
-                round(s["completed"] / s["total"] * 100, 1)
-                if s["total"] > 0 else 0
+                round(s["completed"] / s["total"] * 100, 1) if s["total"] > 0 else 0
             )
             sessions.append(s)
         return sessions
@@ -675,18 +697,23 @@ class EvalService:
             return round(sum(1 for v in vals if v) / len(vals) * 100, 1)
 
         hit_rates = [
-            r["retrieval_hit_rate"] for r in runs
+            r["retrieval_hit_rate"]
+            for r in runs
             if r.get("retrieval_hit_rate") is not None
         ]
-        avg_hit_rate = round(sum(hit_rates) / len(hit_rates) * 100, 1) if hit_rates else None
+        avg_hit_rate = (
+            round(sum(hit_rates) / len(hit_rates) * 100, 1) if hit_rates else None
+        )
 
         return {
-            "session_id":             session_id,
-            "total":                  total,
-            "scored":                 len(scored),
-            "pct_correctness":        pct_true("score_correctness"),   # % câu trả lời đúng pháp lý
-            "pct_groundedness":       pct_true("score_groundedness"),  # % không hallucinate
-            "pct_behavior":           pct_true("score_behavior"),      # % đúng expected_behavior
-            "pct_citation":           pct_true("score_citation"),      # % trích dẫn điều khoản đúng
-            "avg_retrieval_hit_rate": avg_hit_rate,                    # % node hit trung bình
+            "session_id": session_id,
+            "total": total,
+            "scored": len(scored),
+            "pct_correctness": pct_true(
+                "score_correctness"
+            ),  # % câu trả lời đúng pháp lý
+            "pct_groundedness": pct_true("score_groundedness"),  # % không hallucinate
+            "pct_behavior": pct_true("score_behavior"),  # % đúng expected_behavior
+            "pct_citation": pct_true("score_citation"),  # % trích dẫn điều khoản đúng
+            "avg_retrieval_hit_rate": avg_hit_rate,  # % node hit trung bình
         }
