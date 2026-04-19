@@ -10,17 +10,16 @@ AI_SERVICE_URL = os.getenv("LEXMIND_AI_SERVICE_URL", "http://localhost:8001").rs
 )
 INTERNAL_SECRET = os.getenv("INTERNAL_SECRET")
 
-# Regex parse node IDs từ context XML (format: <source id="d7_k7_c" score="0.85" ...>)
+# Regex parse node IDs từ context XML (format: <source id="nd168_2024_d7_k7_c" score="0.85" ...>)
 _RE_GRAPH_SOURCE = re.compile(r'<source\s+id="([^"]+)"\s+score="([\d.]+)"')
 
 # Whitelist node IDs được phép đưa vào prompt chấm.
-# Hỗ trợ các dạng:
-# - dieu_7
-# - d7_k7
-# - d7_k7_c / d7_k7_a / d50_k1_b
-# - k7_k7_a
+# Hỗ trợ cả format cũ và mới (có tiền tố doc_ref):
+# - dieu_7          / nd168_2024_dieu_7
+# - d7_k7           / nd168_2024_d7_k7
+# - d7_k7_c         / nd168_2024_d7_k7_c / l35_2024_d13_k1_a
 _RE_ALLOWED_GRADING_NODE_ID = re.compile(
-    r"^(?:" r"dieu_\d+" r"|d\d+(?:_k\d+(?:_[\wđ]+)?)?" r"|k\d+_k\d+(?:_[\wđ]+)?" r")$",
+    r"^(?:[a-z]\w+_\d{4}_)?(?:dieu_\d+|d\d+(?:_k\d+(?:_[\wđ]+)?)?)$",
     re.IGNORECASE,
 )
 

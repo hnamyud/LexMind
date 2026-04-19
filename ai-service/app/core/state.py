@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Any, Annotated
+from typing import TypedDict, List, Any, Annotated, Optional
 from langgraph.graph.message import add_messages
 
 
@@ -12,7 +12,9 @@ class RAGState(TypedDict):
     # ── Step 1: Router + Extractor output ────────────────────────────────────
     route: str             # "use_tool" | "direct_answer" | "absurd_logic" | "out_of_domain"
     legal_query: str       # thuật ngữ pháp lý đã chuẩn hóa
-    entities: dict         # {violation, vehicle_type, subject, conditions[]}
+    entities: dict         # Schema phụ thuộc query_mode:
+                           # - penalty_lookup: {violation, vehicle_type, subject, conditions[]}
+                           # - provision_lookup: {legal_concept, document_ref, article_ref, article_node_id}
     response_style: str    # "legal" (format cứng, trích dẫn luật) | "natural" (thân thiện)
     complexity_level: int  # 1=Simple | 2=Medium | 3=Complex — điều chỉnh thinking budget
     enable_web_search: bool  # False khi chạy RAGAS experiment — đọc từ config trong router node
@@ -20,7 +22,7 @@ class RAGState(TypedDict):
 
     # ── Step 1b: Sub-query decomposition (multi-violation) ───────────────────
     sub_queries: List[dict]    # [{"legal_query": "...", "entities": {...}, "label": "..."}, ...]
-                               # Rỗng [] nếu chỉ có 1 vi phạm
+                               # Rỗng [] nếu chỉ có 1 vi phạm hoặc provision_lookup
 
     # ── Step 2: Retriever output ─────────────────────────────────────────────
     context: str               # context text tổng hợp từ Neo4j (hoặc web)

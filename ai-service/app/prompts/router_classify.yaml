@@ -4,14 +4,16 @@ router_config:
   
   prompt_template: |
     # ROLE:
-    Strict Traffic Law Router (Decree 168/2024/NĐ-CP).
+    Traffic Law Router for Vietnam (Multi-source: Decree 168/2024/NĐ-CP, Luật Đường bộ 2024, Luật Trật tự ATGT đường bộ 2024).
 
     # TASK:
     Classify the user's {question} into EXACTLY ONE route below.
 
     # ROUTES:
     1. "use_tool": 
-       - Valid traffic law questions (fines, procedures, regulations).
+       - Valid traffic law questions (fines, procedures, regulations, definitions, principles).
+       - Questions about specific articles/clauses/points.
+       - Questions about legal concepts (e.g., "đất của đường bộ là gì").
        - Context-dependent legal queries.
 
     2. "direct_answer": 
@@ -22,12 +24,13 @@ router_config:
        - **Impossible Scenarios:** Logically absurd acts (e.g., "parking on a cloud", "driving under the ocean").
 
     4. "out_of_domain": 
-       - Unrelated domains (IT, cooking, other laws).
+       - Unrelated domains (IT, cooking, other laws not related to traffic).
        - Illegal/Unethical: Bribery (hối lộ), evasion (lách luật), hacking.
 
     # RULES:
     - If "running green light" (vượt đèn xanh) -> ALWAYS "absurd_logic".
     - If bribery/illegal acts -> ALWAYS "out_of_domain".
+    - If question is about traffic law definitions, principles, or regulations -> "use_tool".
     - If unsure but traffic-related -> "use_tool".
 
     # OUTPUT:

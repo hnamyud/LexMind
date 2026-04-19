@@ -17,6 +17,24 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from .base import _extract_ai_text
 
 
+def _build_article_node_id(doc_ref: str, article: str, clause: str = None, point: str = None) -> str:
+    """
+    Build node ID từ article_ref components.
+    
+    Format:
+    - Chỉ điều:           "l35_2024_dieu_13"
+    - Điều + khoản:      "nd168_2024_d7_k7"
+    - Điều + khoản + điểm: "nd168_2024_d7_k7_c"
+    """
+    if clause:
+        parts = [doc_ref, f"d{article}", f"k{clause}"]
+        if point:
+            parts.append(point)
+    else:
+        parts = [doc_ref, f"dieu_{article}"]
+    return "_".join(parts)
+
+
 async def _node_rewrite(self, state: dict) -> dict:
     """
     Step 1b: Chuẩn hóa thuật ngữ + bóc tách entities + phân tách đa vi phạm + đánh giá complexity.
@@ -61,8 +79,22 @@ async def _node_rewrite(self, state: dict) -> dict:
 
         legal_query = data.get("legal_query", "")
         entities = data.get("entities", {})
+        query_mode = data.get("query_mode", "penalty_lookup")
 
-        # Parse & validate sub_queries
+        if query_mode == "provision_lookup":
+            article_ref = entities.get("article_ref")
+            document_ref = entities.get("document_ref")
+            
+            if article_ref and document_ref:
+                article = article_ref.get("article")
+                clause = article_ref.get("clause")
+                point = article_ref.get("point")
+                
+                if article:
+                    entities["article_node_id"] = _build_article_node_id(
+                        document_ref, article, clause, point
+                    )
+
         sub_queries = data.get("sub_queries", [])
         validated_subs = []
         for sq in sub_queries[:3]:
@@ -73,22 +105,20 @@ async def _node_rewrite(self, state: dict) -> dict:
                     "label": sq.get("label", sq["legal_query"][:30]),
                 })
 
-        # Parse + validate complexity_level
         raw_level = data.get("complexity_level", 2)
         try:
             complexity_level = max(1, min(3, int(raw_level)))
         except (TypeError, ValueError):
             complexity_level = 2
 
-        # Auto-upgrade dựa trên số sub_queries
         if len(validated_subs) >= 2 and complexity_level < 3:
             complexity_level = 3
         elif len(validated_subs) == 1 and complexity_level < 2:
             complexity_level = 2
 
         logging.info(
-            f"[STEP1b] legal_query={legal_query!r}, sub_queries={len(validated_subs)}, "
-            f"complexity_level={complexity_level}"
+            f"[STEP1b] query_mode={query_mode}, legal_query={legal_query!r}, "
+            f"sub_queries={len(validated_subs)}, complexity_level={complexity_level}"
         )
         return {
             "legal_query": legal_query,
@@ -100,7 +130,7 @@ async def _node_rewrite(self, state: dict) -> dict:
         logging.error(f"[STEP1b] Lỗi: {e} — fallback")
         return {
             "legal_query": last_question,
-            "entities": {},
+            "entities": {"query_mode": "penalty_lookup"},
             "sub_queries": [],
             "complexity_level": 2,
         }

@@ -315,16 +315,18 @@ class GraphRetrievalTool(BaseTool):
         'NGOAI_TRU', 'THAY_THE_CHO', 'UU_TIEN_AP_DUNG', 'VA'
     ]
     RETURN
-        node.id         AS id,
-        node.text       AS text,
-        node.raw_text   AS raw_content,
-        node.name       AS name,
-        labels(node)[0] AS label,
+        node.id           AS id,
+        node.text         AS text,
+        node.raw_text     AS raw_content,
+        node.doc_ref      AS doc_ref,
+        node.source_title AS source_title,
+        node.source_type  AS source_type,
+        node.path         AS path,
+        labels(node)[0]   AS label,
         collect(DISTINCT {
-            rel_type:    type(r),
-            related_id:  related.id,
-            related_name: related.name,
-            related_text: related.raw_text
+            rel_type: type(r),
+            related_id: related.id,
+            related_text: related.text
         }) AS relationships,
         score,
         'keyword' AS source
@@ -343,16 +345,18 @@ class GraphRetrievalTool(BaseTool):
         'NGOAI_TRU', 'THAY_THE_CHO', 'UU_TIEN_AP_DUNG', 'VA'
     ]
     RETURN
-        node.id         AS id,
-        node.text       AS text,
-        node.raw_text   AS raw_content,
-        node.name       AS name,
-        labels(node)[0] AS label,
+        node.id           AS id,
+        node.text         AS text,
+        node.raw_text     AS raw_content,
+        node.doc_ref      AS doc_ref,
+        node.source_title AS source_title,
+        node.source_type  AS source_type,
+        node.path         AS path,
+        labels(node)[0]   AS label,
         collect(DISTINCT {
-            rel_type:    type(r),
-            related_id:  related.id,
-            related_name: related.name,
-            related_text: related.raw_text
+            rel_type: type(r),
+            related_id: related.id,
+            related_text: related.text
         }) AS relationships,
         score,
         'vector' AS source
@@ -380,17 +384,20 @@ class GraphRetrievalTool(BaseTool):
     OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article:Article)
 
     RETURN
-        action.id         AS id,
-        action.text       AS text,
-        action.raw_text   AS raw_content,
-        action.name       AS name,
-        'Action'          AS label,
-        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_name: article.name,      related_text: article.raw_text})
-      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_name: consequence.name,  related_text: consequence.raw_text})
-      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_name: condition.name,    related_text: condition.raw_text})
-      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_name: subject.name,      related_text: subject.raw_text})
-      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_name: context_cond.name, related_text: context_cond.raw_text})
-      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_name: ref_article.name,  related_text: ref_article.raw_text})
+        action.id           AS id,
+        action.text         AS text,
+        action.raw_text     AS raw_content,
+        action.doc_ref      AS doc_ref,
+        action.source_title AS source_title,
+        action.source_type  AS source_type,
+        action.path         AS path,
+        'Action'            AS label,
+        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_text: article.text})
+      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_text: consequence.text})
+      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_text: condition.text})
+      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_text: subject.text})
+      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_text: context_cond.text})
+      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_text: ref_article.text})
         AS relationships,
         score,
         'graph' AS source
@@ -413,7 +420,6 @@ class GraphRetrievalTool(BaseTool):
     WITH node, subj, subj_score
 
     // Bước 3: Filter nodes theo violation qua Fulltext Index
-    // Note: Đã bỏ score filter - let RRF handle ranking
     CALL db.index.fulltext.queryNodes('legal_fulltext_index', $violation)
     YIELD node AS violation_node, score AS violation_score
     WHERE violation_node.id = node.id
@@ -428,16 +434,18 @@ class GraphRetrievalTool(BaseTool):
         'TRONG_TRUONG_HOP', 'DOI_VOI', 'NHOM_HANH_VI'
     ]
     RETURN
-        node.id         AS id,
-        node.text       AS text,
-        node.raw_text   AS raw_content,
-        node.name       AS name,
-        labels(node)[0] AS label,
+        node.id           AS id,
+        node.text         AS text,
+        node.raw_text     AS raw_content,
+        node.doc_ref      AS doc_ref,
+        node.source_title AS source_title,
+        node.source_type  AS source_type,
+        node.path         AS path,
+        labels(node)[0]   AS label,
         collect(DISTINCT {
-            rel_type:    type(r),
-            related_id:  related.id,
-            related_name: related.name,
-            related_text: related.raw_text
+            rel_type: type(r),
+            related_id: related.id,
+            related_text: related.text
         }) AS relationships,
         violation_score AS score,
         'graph_subject' AS source
@@ -467,21 +475,78 @@ class GraphRetrievalTool(BaseTool):
     OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article:Article)
 
     RETURN
-        action.id         AS id,
-        action.text       AS text,
-        action.raw_text   AS raw_content,
-        action.name       AS name,
-        'Action'          AS label,
-        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_name: article.name,      related_text: article.raw_text})
-      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_name: consequence.name,  related_text: consequence.raw_text})
-      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_name: condition.name,    related_text: condition.raw_text})
-      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_name: subject.name,      related_text: subject.raw_text})
-      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_name: context_cond.name, related_text: context_cond.raw_text})
-      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_name: ref_article.name,  related_text: ref_article.raw_text})
+        action.id           AS id,
+        action.text         AS text,
+        action.raw_text     AS raw_content,
+        action.doc_ref      AS doc_ref,
+        action.source_title AS source_title,
+        action.source_type  AS source_type,
+        action.path         AS path,
+        'Action'            AS label,
+        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_text: article.text})
+      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_text: consequence.text})
+      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_text: condition.text})
+      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_text: subject.text})
+      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_text: context_cond.text})
+      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_text: ref_article.text})
         AS relationships,
         score,
         'consequence_first' AS source
     ORDER BY score DESC
+    """
+
+    # ── Nhánh 5: Provision Lookup (cho provision_lookup mode) ───────────────
+    # Tìm Article/Definition/Chapter nodes cho câu hỏi định nghĩa/quy định.
+    
+    # 5a: Fulltext search trên Article/Definition/Chapter
+    _CYPHER_PROVISION_FULLTEXT = """
+    CALL db.index.fulltext.queryNodes('legal_fulltext_index', $keyword)
+    YIELD node, score
+    WHERE 'Article' IN labels(node) OR 'Definition' IN labels(node) OR 'Chapter' IN labels(node)
+    WITH node, score
+    ORDER BY score DESC
+    LIMIT $top_k
+    OPTIONAL MATCH (node)-[r]-(related)
+    WHERE type(r) IN ['THUOC', 'QUY_DINH_TAI', 'GIAI_THICH', 'THAM_CHIEU_DEN', 'CHUA']
+    RETURN
+        node.id           AS id,
+        node.text         AS text,
+        node.raw_text     AS raw_content,
+        node.doc_ref      AS doc_ref,
+        node.source_title AS source_title,
+        node.source_type  AS source_type,
+        node.path         AS path,
+        labels(node)[0]   AS label,
+        collect(DISTINCT {
+            rel_type: type(r), 
+            related_id: related.id, 
+            related_text: related.text
+        }) AS relationships,
+        score,
+        'provision' AS source
+    ORDER BY score DESC
+    """
+
+    # 5b: Exact match theo article_node_id
+    _CYPHER_PROVISION_EXACT = """
+    MATCH (n {id: $article_id})
+    OPTIONAL MATCH (n)-[r]-(related)
+    WHERE type(r) IN ['THUOC', 'QUY_DINH_TAI', 'GIAI_THICH', 'CHUA']
+    RETURN
+        n.id           AS id,
+        n.text         AS text,
+        n.raw_text     AS raw_content,
+        n.doc_ref      AS doc_ref,
+        n.source_title AS source_title,
+        n.source_type  AS source_type,
+        n.path         AS path,
+        labels(n)[0]   AS label,
+        collect(DISTINCT {
+            rel_type: type(r), 
+            related_id: related.id
+        }) AS relationships,
+        1.0 AS score,
+        'exact' AS source
     """
 
     # ══════════════════════════════════════════════════════════════════════
@@ -562,8 +627,8 @@ class GraphRetrievalTool(BaseTool):
 
         create_index_cypher = """
         CREATE FULLTEXT INDEX legal_fulltext_index IF NOT EXISTS
-        FOR (n:Article|Action|Consequence|Condition|Subject|Entity)
-        ON EACH [n.name, n.text, n.raw_text]
+        FOR (n:Article|Action|Consequence|Condition|Subject|Definition|Chapter)
+        ON EACH [n.text, n.raw_text]
         OPTIONS {
             indexConfig: {
                 `fulltext.analyzer`: 'standard-no-stop-words',
@@ -759,6 +824,83 @@ class GraphRetrievalTool(BaseTool):
 
         except Exception as e:
             logging.error(f"[ConsequenceFirst] Query failed: {e}")
+            return []
+
+    # ------------------------------------------------------------------
+    # Nhánh 5: Provision Lookup (cho provision_lookup mode)
+    # ------------------------------------------------------------------
+    async def _search_provision(self, query: str, entities: dict) -> list[dict]:
+        """
+        Nhánh 5: Provision lookup cho câu hỏi định nghĩa/quy định.
+
+        Chiến lược:
+        1. Nếu có article_node_id → exact match
+        2. Nếu có legal_concept → fulltext search trên Article/Definition/Chapter
+        3. Nếu có document_ref → boost kết quả khớp
+
+        Parameters
+        ----------
+        query : str
+            Original user query hoặc legal_query đã chuẩn hóa.
+        entities : dict
+            Extracted entities với fields:
+            - legal_concept: khái niệm pháp lý cần tra cứu
+            - document_ref: mã văn bản (l35_2024, l36_2024, nd168_2024)
+            - article_node_id: node ID đã build từ article_ref
+
+        Returns
+        -------
+        list[dict]
+            List of Article/Definition/Chapter nodes.
+        """
+        article_node_id = entities.get("article_node_id")
+        legal_concept = entities.get("legal_concept") or query
+        document_ref = entities.get("document_ref")
+
+        results = []
+
+        try:
+            async with self.driver.session(
+                database=settings.NEO4J_DATABASE,
+                default_access_mode=neo4j.READ_ACCESS,
+            ) as session:
+                # Ưu tiên exact match nếu có article_node_id
+                if article_node_id:
+                    result = await session.run(
+                        self._CYPHER_PROVISION_EXACT,
+                        article_id=article_node_id,
+                    )
+                    exact_records = await result.data()
+                    if exact_records:
+                        logging.info(
+                            f"[Provision] Exact match found: {article_node_id}"
+                        )
+                        return exact_records
+
+                # Fallback: fulltext search
+                escaped_keyword = _escape_lucene(legal_concept)
+                result = await session.run(
+                    self._CYPHER_PROVISION_FULLTEXT,
+                    keyword=escaped_keyword,
+                    top_k=self.top_k,
+                )
+                records = await result.data()
+
+                # Boost theo document_ref nếu có
+                if document_ref and records:
+                    for r in records:
+                        if r.get("doc_ref") == document_ref:
+                            r["_rrf_score"] = r.get("score", 1.0) * 1.2
+                            r["_doc_ref_boosted"] = True
+
+                logging.info(
+                    f"[Provision] Fulltext search found {len(records)} nodes "
+                    f"for keyword: {legal_concept[:50]}"
+                )
+                return records
+
+        except Exception as e:
+            logging.error(f"[Provision] Query failed: {e}")
             return []
 
     # ------------------------------------------------------------------
@@ -1008,15 +1150,23 @@ class GraphRetrievalTool(BaseTool):
             score = r.get("_rrf_score", 0)
             label = r.get("label", "Unknown")
             node_id = r.get("id", "")
-            name = r.get("name", "")
 
             lines = [
                 f'<source id="{_xe(node_id)}" score="{score:.3f}"'
                 f' label="{_xe(label)}" from="{_xe(sources)}">'
             ]
 
-            if name:
-                lines.append(f"  <name>{_xe(name)}</name>")
+            # Metadata văn bản (nếu có)
+            doc_ref = r.get("doc_ref")
+            source_title = r.get("source_title")
+            path = r.get("path")
+
+            if doc_ref:
+                lines.append(f"  <doc_ref>{_xe(doc_ref)}</doc_ref>")
+            if source_title:
+                lines.append(f"  <source_title>{_xe(source_title)}</source_title>")
+            if path:
+                lines.append(f"  <path>{_xe(path)}</path>")
 
             # Nội dung chính
             raw_content = r.get("raw_content") or r.get("text") or ""
@@ -1034,9 +1184,7 @@ class GraphRetrievalTool(BaseTool):
                 for rel in valid_rels:
                     rel_type = rel.get("rel_type", "UNKNOWN")
                     rel_id = rel.get("related_id", "")
-                    rel_text = (
-                        rel.get("related_text", "") or rel.get("related_name", "") or ""
-                    )
+                    rel_text = rel.get("related_text", "") or ""
                     if len(rel_text) > 500:
                         rel_text = rel_text[:500] + "..."
                     lines.append(
@@ -1048,8 +1196,6 @@ class GraphRetrievalTool(BaseTool):
             lines.append("</source>")
             context_blocks.append("\n".join(lines))
 
-        # Present low-score blocks first so the highest-score block is closest
-        # to the user question when context is injected into generator messages.
         return "\n\n".join(reversed(context_blocks))
 
     # ------------------------------------------------------------------
@@ -1089,16 +1235,20 @@ class GraphRetrievalTool(BaseTool):
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         """
-        Async entry point — chạy 4 nhánh search SONG SONG.
+        Async entry point — chạy search theo query_mode.
 
-        Chiến lược mới: Keyword + Vector + Graph + ConsequenceFirst (nhánh 4)
+        Chiến lược:
+        - penalty_lookup: Keyword + Vector + Graph + ConsequenceFirst (4 nhánh)
+        - provision_lookup: Keyword + Vector + Provision (3 nhánh, bỏ Graph/Consequence)
 
         Parameters
         ----------
         query : str
             Thuật ngữ pháp lý đã chuẩn hóa (legal_query từ router).
         entities : dict, optional
-            Entities đã bóc tách: {violation, vehicle_type, subject, conditions[]}.
+            Entities đã bóc tách. Schema phụ thuộc query_mode:
+            - penalty_lookup: {violation, vehicle_type, subject, conditions[]}
+            - provision_lookup: {legal_concept, document_ref, article_ref, article_node_id}
 
         Returns
         -------
@@ -1112,21 +1262,12 @@ class GraphRetrievalTool(BaseTool):
             return "Lỗi: Chưa tải embedding model."
 
         entities = entities or {}
+        query_mode = entities.get("query_mode", "penalty_lookup")
 
         try:
             # ── Bước 1: Tạo embedding (CPU-bound → executor) ─────────────
             loop = asyncio.get_running_loop()
             vector = await loop.run_in_executor(None, self._embed, query)
-
-            # ── Bước 2: Chạy SONG SONG 4 nhánh với Timeout Guard ────────────
-            logging.info(
-                f"[GraphRetrievalTool] 🚀 Bắt đầu parallel search với timeouts: "
-                f"keyword={self.keyword_timeout}s, vector={self.vector_timeout}s, "
-                f"graph={self.graph_timeout}s, consequence={self.consequence_timeout}s | "
-                f"query='{query[:50]}' | "
-                f"violation='{entities.get('violation', '')[:50]}' | "
-                f"vehicle='{entities.get('vehicle_type', '')}'"
-            )
 
             # Wrap mỗi search với timeout guard
             async def search_with_timeout(coro, timeout: float, branch_name: str):
@@ -1142,60 +1283,108 @@ class GraphRetrievalTool(BaseTool):
                     logging.error(f"[{branch_name}] Exception: {e}")
                     return []
 
-            # Tạo tasks với timeout guards (4 nhánh)
-            keyword_task = search_with_timeout(
-                self._search_keyword(query), self.keyword_timeout, "Keyword"
-            )
-            vector_task = search_with_timeout(
-                self._search_vector(vector), self.vector_timeout, "Vector"
-            )
-            graph_task = search_with_timeout(
-                self._search_graph(entities), self.graph_timeout, "Graph"
-            )
-            consequence_task = search_with_timeout(
-                self._search_consequence_first(query, entities),
-                self.consequence_timeout,
-                "ConsequenceFirst",
-            )
-
-            keyword_results, vector_results, graph_results, consequence_results = (
-                await asyncio.gather(
-                    keyword_task,
-                    vector_task,
-                    graph_task,
-                    consequence_task,  # 4th branch
+            # ── Bước 2: Phân nhánh theo query_mode ─────────────────────────
+            if query_mode == "provision_lookup":
+                # Provision lookup: Keyword + Vector + Provision (bỏ Graph/Consequence)
+                logging.info(
+                    f"[GraphRetrievalTool] 🚀 Provision mode: query='{query[:50]}' | "
+                    f"legal_concept='{entities.get('legal_concept', '')[:50]}' | "
+                    f"document_ref='{entities.get('document_ref', '')}'"
                 )
-            )
 
-            logging.info(
-                f"[GraphRetrievalTool] ✅ Parallel search hoàn tất: "
-                f"keyword={len(keyword_results)} | "
-                f"vector={len(vector_results)} | "
-                f"graph={len(graph_results)} | "
-                f"consequence={len(consequence_results)}"
-            )
+                keyword_task = search_with_timeout(
+                    self._search_keyword(query), self.keyword_timeout, "Keyword"
+                )
+                vector_task = search_with_timeout(
+                    self._search_vector(vector), self.vector_timeout, "Vector"
+                )
+                provision_task = search_with_timeout(
+                    self._search_provision(query, entities), self.graph_timeout, "Provision"
+                )
 
-            # ── Bước 3: Merge + Deduplicate + Rank với RRF ───────────────────────
-            merged = self._merge_results(
-                keyword_results,
-                vector_results,
-                graph_results,
-                consequence_results,  # Pass 4th branch
-            )
+                keyword_results, vector_results, provision_results = (
+                    await asyncio.gather(keyword_task, vector_task, provision_task)
+                )
 
-            # ── Bước 3.5: Apply Vehicle-Aware Boosting (Post-RRF) ────────────────
-            merged = self._apply_vehicle_boost(merged, entities)
+                # Filter action_/hv_ nodes cho provision_lookup
+                provision_results = [
+                    r for r in provision_results
+                    if not (r.get("id", "").startswith("action_") or r.get("id", "").startswith("hv_"))
+                ]
+
+                logging.info(
+                    f"[GraphRetrievalTool] ✅ Provision search hoàn tất: "
+                    f"keyword={len(keyword_results)} | vector={len(vector_results)} | "
+                    f"provision={len(provision_results)}"
+                )
+
+                # Merge với empty graph/consequence results
+                merged = self._merge_results(
+                    keyword_results, vector_results, [], []
+                )
+                # Add provision results to merged
+                for r in provision_results:
+                    node_id = r.get("id")
+                    if node_id and not any(m.get("id") == node_id for m in merged):
+                        merged.append(r)
+
+            else:
+                # Penalty lookup: Keyword + Vector + Graph + ConsequenceFirst (4 nhánh)
+                logging.info(
+                    f"[GraphRetrievalTool] 🚀 Penalty mode: query='{query[:50]}' | "
+                    f"violation='{entities.get('violation', '')[:50]}' | "
+                    f"vehicle='{entities.get('vehicle_type', '')}'"
+                )
+
+                keyword_task = search_with_timeout(
+                    self._search_keyword(query), self.keyword_timeout, "Keyword"
+                )
+                vector_task = search_with_timeout(
+                    self._search_vector(vector), self.vector_timeout, "Vector"
+                )
+                graph_task = search_with_timeout(
+                    self._search_graph(entities), self.graph_timeout, "Graph"
+                )
+                consequence_task = search_with_timeout(
+                    self._search_consequence_first(query, entities),
+                    self.consequence_timeout,
+                    "ConsequenceFirst",
+                )
+
+                keyword_results, vector_results, graph_results, consequence_results = (
+                    await asyncio.gather(
+                        keyword_task,
+                        vector_task,
+                        graph_task,
+                        consequence_task,
+                    )
+                )
+
+                logging.info(
+                    f"[GraphRetrievalTool] ✅ Penalty search hoàn tất: "
+                    f"keyword={len(keyword_results)} | vector={len(vector_results)} | "
+                    f"graph={len(graph_results)} | consequence={len(consequence_results)}"
+                )
+
+                merged = self._merge_results(
+                    keyword_results,
+                    vector_results,
+                    graph_results,
+                    consequence_results,
+                )
+
+                # ── Apply Vehicle-Aware Boosting (chỉ cho penalty_lookup) ────────────────
+                merged = self._apply_vehicle_boost(merged, entities)
 
             if not merged:
                 not_found_msg = (
                     "Không tìm thấy thông tin liên quan trong cơ sở dữ liệu đồ thị. "
-                    "Câu hỏi có thể nằm ngoài phạm vi Nghị định 168/2024/NĐ-CP."
+                    "Câu hỏi có thể nằm ngoài phạm vi văn bản luật hiện có."
                 )
                 self._write_query_log(query, entities, "(KHÔNG TÌM THẤY KẾT QUẢ)")
                 return not_found_msg
 
             # ── Bước 3.6: THRESHOLDING — kiểm tra chất lượng kết quả ─────
-            # Nếu điểm cao nhất vẫn dưới ngưỡng → Graph "đầu hàng" và signal cho Web Search
             max_score = merged[0].get("_rrf_score", 0) if merged else 0
 
             if max_score < self.rrf_threshold:
@@ -1213,11 +1402,9 @@ class GraphRetrievalTool(BaseTool):
                 return low_confidence_msg
 
             # ── Bước 4: Format context ───────────────────────────────────
-            # Giới hạn top kết quả sau merge (tránh quá nhiều)
-            max_results = self.top_k * 2  # cho phép nhiều hơn mỗi nhánh 1 chút
+            max_results = self.top_k * 2
             context = self._format_context(merged[:max_results])
 
-            # ── Ghi log ra file ───────────────────────────────────────────
             self._write_query_log(query, entities, context)
 
             return context

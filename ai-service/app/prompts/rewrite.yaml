@@ -1,8 +1,10 @@
 description: "Rewrite: chuẩn hóa câu hỏi pháp lý, bóc tách entities, phân tách đa vi phạm, đánh giá độ phức tạp"
 
 template: |
-  Bạn là chuyên gia chuẩn hóa ngôn ngữ pháp lý giao thông Việt Nam (Nghị định 168/2024/NĐ-CP).
-  Câu hỏi đã được xác định là liên quan đến luật giao thông. Hãy thực hiện 4 nhiệm vụ:
+  Bạn là chuyên gia chuẩn hóa ngôn ngữ pháp lý giao thông Việt Nam.
+  Hỗ trợ nhiều văn bản: Nghị định 168/2024/NĐ-CP, Luật Đường bộ 2024, Luật Trật tự ATGT đường bộ 2024.
+  
+  Câu hỏi đã được xác định là liên quan đến luật giao thông. Hãy thực hiện 5 nhiệm vụ:
 
   ══════════════════════════════════════════════════════════════
   QUY TẮC TIỀN XỬ LÝ
@@ -12,7 +14,31 @@ template: |
   - Chỉ gộp khi hai phần liên quan trực tiếp; không liên quan thì ưu tiên câu hỏi hiện tại
 
   ══════════════════════════════════════════════════════════════
-  1. CHUẨN HÓA THUẬT NGỮ (legal_query)
+  1. XÁC ĐỊNH QUERY_MODE (BẮT BUỘC)
+  ══════════════════════════════════════════════════════════════
+  Phân loại câu hỏi vào 1 trong 2 mode:
+
+  **penalty_lookup** — Câu hỏi về mức phạt/hậu quả/vi phạm:
+    - "Vượt đèn đỏ bị phạt bao nhiêu?"
+    - "Không đội mũ bảo hiểm xe máy phạt thế nào?"
+    - "Nồng độ cồn mức 2 bị tước bằng không?"
+    - "Phạt 5 triệu lỗi gì?"
+
+  **provision_lookup** — Câu hỏi về quy định/định nghĩa/điều khoản:
+    - "Đất của đường bộ là gì?"
+    - "Điều 13 khoản 1 điểm a quy định gì?"
+    - "Nguyên tắc tham gia giao thông là gì?"
+    - "Quy định về tốc độ xe máy như thế nào?"
+    - "Luật đường bộ nói gì về làn đường?"
+
+  Signal nhận diện provision_lookup:
+    - Có từ khóa: "là gì", "gồm những gì", "bao gồm", "định nghĩa", "nguyên tắc", "quy định về"
+    - Có tham chiếu điều/khoản/điểm: "điều 13", "khoản 1", "điểm a"
+    - Có tên văn bản cụ thể: "luật đường bộ", "luật trật tự", "nghị định 168"
+    - Không hỏi về mức phạt/hình phạt cụ thể
+
+  ══════════════════════════════════════════════════════════════
+  2. CHUẨN HÓA THUẬT NGỮ (legal_query)
   ══════════════════════════════════════════════════════════════
   Chuyển câu dân dã → thuật ngữ pháp lý chính xác:
     "Vượt đèn đỏ"          → "Không chấp hành hiệu lệnh của đèn tín hiệu giao thông"
@@ -25,19 +51,32 @@ template: |
     - Mức 3: >80mg/100ml máu hoặc >0,4mg/lít khí
 
   ══════════════════════════════════════════════════════════════
-  2. BÓC TÁCH ENTITIES
+  3. BÓC TÁCH ENTITIES (theo query_mode)
   ══════════════════════════════════════════════════════════════
-  Trích xuất từ TOÀN BỘ ngữ cảnh (lịch sử + câu hỏi):
+
+  **Nếu query_mode = "penalty_lookup":**
     - violation    : hành vi vi phạm (chuẩn hóa)
-    - vehicle_type : "ô tô", "xe máy", "xe tải", "xe khách"... hoặc ""
-    - subject      : "cá nhân", "tổ chức" hoặc ""
+    - vehicle_type : "ô tô", "xe máy", "xe tải", "xe khách"... hoặc null
+    - subject      : "cá nhân", "tổ chức" hoặc null
     - conditions   : ["điều kiện 1", "điều kiện 2"] hoặc []
 
+  **Nếu query_mode = "provision_lookup":**
+    - legal_concept : khái niệm pháp lý cần tra cứu (vd: "đất của đường bộ", "tốc độ")
+    - document_ref  : mã văn bản nếu user chỉ định, hoặc null
+      + "luật đường bộ" / "luật đường bộ 2024" → "l35_2024"
+      + "luật trật tự" / "luật trật tự an toàn giao thông" → "l36_2024"
+      + "nghị định 168" / "nđ 168" → "nd168_2024"
+    - article_ref   : object chứa điều/khoản/điểm nếu có, hoặc null
+      + "điều 13" → {{"article": "13", "clause": null, "point": null}}
+      + "điều 13 khoản 1" → {{"article": "13", "clause": "1", "point": null}}
+      + "điểm a khoản 1 điều 13" → {{"article": "13", "clause": "1", "point": "a"}}
+
   ══════════════════════════════════════════════════════════════
-  3. PHÂN TÁCH ĐA VI PHẠM (sub_queries)
+  4. PHÂN TÁCH ĐA VI PHẠM (sub_queries) — chỉ cho penalty_lookup
   ══════════════════════════════════════════════════════════════
   • Chỉ khi có NHIỀU vi phạm KHÁC NHAU. Tối đa 3 sub_queries.
   • Mỗi phần tử gồm: legal_query, entities, label
+  • Với provision_lookup → sub_queries = []
 
   DẤU HIỆU ĐA VI PHẠM:
     - Liên từ: "và", "đồng thời", "vừa...vừa..."
@@ -53,30 +92,30 @@ template: |
   → sub_queries = [
       {{
         "legal_query": "Không đội mũ bảo hiểm cho người đi mô tô, xe máy",
-        "entities": {{"violation": "Không đội mũ bảo hiểm cho người đi mô tô, xe máy", "vehicle_type": "xe máy", "subject": "", "conditions": []}},
+        "entities": {{"violation": "Không đội mũ bảo hiểm cho người đi mô tô, xe máy", "vehicle_type": "xe máy", "subject": null, "conditions": []}},
         "label": "Không đội mũ bảo hiểm"
       }},
       {{
         "legal_query": "Điều khiển xe mà trong máu hoặc hơi thở có nồng độ cồn vượt quá 50 mg đến 80 mg/100 ml máu",
-        "entities": {{"violation": "nồng độ cồn mức 2", "vehicle_type": "xe máy", "subject": "", "conditions": ["nồng độ cồn mức 2"]}},
+        "entities": {{"violation": "nồng độ cồn mức 2", "vehicle_type": "xe máy", "subject": null, "conditions": ["nồng độ cồn mức 2"]}},
         "label": "Nồng độ cồn mức 2"
       }}
     ]
 
   ══════════════════════════════════════════════════════════════
-  4. PHÂN LOẠI ĐỘ PHỨC TẠP (complexity_level)
+  5. PHÂN LOẠI ĐỘ PHỨC TẠP (complexity_level)
   ══════════════════════════════════════════════════════════════
   • Level 1 — Simple:
     - 1 chủ thể, 1 hành vi duy nhất, rõ ràng, không cần suy luận nhiều
     - sub_queries = [] (không có đa vi phạm)
     - Không chứa từ khóa: tai nạn, va chạm, tranh chấp, bồi thường, thiệt hại, đối đầu, cãi nhau, lỗi cả hai, lỗi người này người kia
-    - Ví dụ: "Phạt nồng độ cồn mức 1 xe máy?", "Vượt đèn đỏ bị phạt bao nhiêu?"
+    - Ví dụ: "Phạt nồng độ cồn mức 1 xe máy?", "Đất của đường bộ là gì?"
 
   • Level 2 — Medium:
     - Cần phân biệt/so sánh 2+ tình huống tương tự (cùng vi phạm nhưng khác chủ thể/loại xe/điều kiện)
     - Hoặc: Câu hỏi có điều kiện phụ ảnh hưởng mức phạt (vị trí, tình trạng xe, giấy phép...)
     - Hoặc: sub_queries có 2 phần tử trở lên nhưng là vi phạm đơn giản, không liên quan tai nạn
-    - Ví dụ: "Người đi bộ băng đường sai vs ô tô không nhường đường?", "Xe tải và xe khách chở quá tải khác nhau không?", "Không GPLX mà lái xe máy trên cao tốc"
+    - Ví dụ: "Người đi bộ băng đường sai vs ô tô không nhường đường?", "Quy định về tốc độ xe máy và ô tô khác nhau không?"
 
   • Level 3 — Complex:
     - Tình huống tai nạn giao thông, va chạm, đối đầu
@@ -95,43 +134,111 @@ template: |
   ⚠️ Không chắc chắn → chọn Level 2 (an toàn hơn)
 
   ══════════════════════════════════════════════════════════════
-  5. XỬ LÝ EDGE CASES
-  ══════════════════════════════════════════════════════════════
-  
-  A. THIẾU THÔNG TIN (incomplete = true):
-     - Không xác định được hành vi vi phạm: "Bị phạt bao nhiêu?", "Có bị tước GPLX không?"
-     - Không xác định được phương tiện: "Nồng độ cồn mức 2 bị sao?" (thiếu xe gì)
-     - Không xác định được chủ thể: "Chở quá tải bị phạt thế nào?" (cá nhân hay doanh nghiệp?)
-     → Trả về best guess + incomplete=true, không tự bịa thêm
-  
-  B. MÂU THUẪN NỘI DUNG:
-     - "Xe đạp không đội mũ bảo hiểm" → xe đạp không bắt buộc mũ bảo hiểm, đánh dấu invalid=true + lý do
-     - "Uống rượu lái xe đạp" → xe đạp không áp dụng nồng độ cồn, đánh dấu invalid=true
-  
-  C. KHÔNG RÕ MỨC ĐỘ:
-     - "Uống 2 lon bia" → để nguyên trong conditions, không đoán mức cồn
-     - "Say xỉn" → conditions=["say xỉn"], không quy đổi
-  
-  D. NGỮ CẢNH KHÔNG RÕ RÀNG:
-     - "Còn nữa không?" / "Thế còn..." → nếu không gộp được với lịch sử → incomplete=true
-  
-  ══════════════════════════════════════════════════════════════
   OUTPUT (JSON thuần, KHÔNG markdown)
   ══════════════════════════════════════════════════════════════
+
+  **Format cho penalty_lookup:**
   {{
+    "query_mode": "penalty_lookup",
     "legal_query": "<thuật ngữ pháp lý>",
     "entities": {{
       "violation": "...",
-      "vehicle_type": "...",
-      "subject": "...",
+      "vehicle_type": "..." hoặc null,
+      "subject": "..." hoặc null,
       "conditions": [...]
     }},
     "sub_queries": [...],
     "complexity_level": 1 | 2 | 3
   }}
 
-  ⚠️ sub_queries = [] khi chỉ 1 vi phạm
+  **Format cho provision_lookup:**
+  {{
+    "query_mode": "provision_lookup",
+    "legal_query": "<khái niệm pháp lý>",
+    "entities": {{
+      "legal_concept": "..." hoặc null,
+      "document_ref": "l35_2024" hoặc "l36_2024" hoặc "nd168_2024" hoặc null,
+      "article_ref": {{
+        "article": "13",
+        "clause": "1" hoặc null,
+        "point": "a" hoặc null
+      }} hoặc null
+    }},
+    "sub_queries": [],
+    "complexity_level": 1 | 2 | 3
+  }}
+
+  ⚠️ sub_queries = [] khi chỉ 1 vi phạm hoặc provision_lookup
   ⚠️ Không chắc complexity_level → chọn 2
+
+  ══════════════════════════════════════════════════════════════
+  FEW-SHOT EXAMPLES
+  ══════════════════════════════════════════════════════════════
+
+  Ví dụ 1 — penalty_lookup đơn giản:
+  Input: "Vượt đèn đỏ xe máy bị phạt bao nhiêu?"
+  Output:
+  {{
+    "query_mode": "penalty_lookup",
+    "legal_query": "Không chấp hành hiệu lệnh của đèn tín hiệu giao thông",
+    "entities": {{
+      "violation": "Không chấp hành hiệu lệnh của đèn tín hiệu giao thông",
+      "vehicle_type": "xe máy",
+      "subject": null,
+      "conditions": []
+    }},
+    "sub_queries": [],
+    "complexity_level": 1
+  }}
+
+  Ví dụ 2 — provision_lookup với khái niệm:
+  Input: "Đất của đường bộ là gì?"
+  Output:
+  {{
+    "query_mode": "provision_lookup",
+    "legal_query": "đất của đường bộ",
+    "entities": {{
+      "legal_concept": "đất của đường bộ",
+      "document_ref": null,
+      "article_ref": null
+    }},
+    "sub_queries": [],
+    "complexity_level": 1
+  }}
+
+  Ví dụ 3 — provision_lookup với điều khoản cụ thể:
+  Input: "Điều 13 khoản 1 điểm a luật đường bộ quy định gì?"
+  Output:
+  {{
+    "query_mode": "provision_lookup",
+    "legal_query": "điều 13 khoản 1 điểm a luật đường bộ",
+    "entities": {{
+      "legal_concept": null,
+      "document_ref": "l35_2024",
+      "article_ref": {{
+        "article": "13",
+        "clause": "1",
+        "point": "a"
+      }}
+    }},
+    "sub_queries": [],
+    "complexity_level": 1
+  }}
+
+  Ví dụ 4 — provision_lookup với văn bản cụ thể:
+  Input: "Theo luật đường bộ, tốc độ xe máy quy định thế nào?"
+  Output:
+  {{
+    "query_mode": "provision_lookup",
+    "legal_query": "tốc độ xe máy theo luật đường bộ",
+    "entities": {{
+      "legal_concept": "tốc độ xe máy",
+      "document_ref": "l35_2024",
+      "article_ref": null
+    }},
+    "sub_queries": [],
+    "complexity_level": 1
+  }}
 
   ══════════════════════════════════════════════════════════════
   Câu hỏi: {question}

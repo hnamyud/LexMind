@@ -26,9 +26,12 @@ _RE_DIEU_KHOAN = re.compile(
     re.IGNORECASE,
 )
 
-# Parse entity IDs dạng: d18_k8_a → "Điều 18 Khoản 8 Điểm a"
+# Parse entity IDs — hỗ trợ cả format cũ và mới có prefix doc_ref:
+#   Cũ: d18_k8_a             → "Điều 18 Khoản 8 Điểm a"
+#   Mới: nd168_2024_d7_k7_c  → "Điều 7 Khoản 7 Điểm c"
+#        l35_2024_dieu_13     → "Điều 13"
 _RE_ENTITY_ID = re.compile(
-    r"\b(d(\d+)(?:_k(\d+))?(?:_([a-zđ]+))?)\b",
+    r"\b(?:[a-z]\w+_\d{4}_)?" r"(?:dieu_(\d+)|d(\d+)(?:_k(\d+)(?:_([a-zđ]+))?)?)\b",
     re.IGNORECASE,
 )
 
@@ -87,14 +90,16 @@ def parse_legal_anchors(context: str) -> list[str]:
     def capitalize_kw(match_obj):
         return match_obj.group(0).capitalize()
 
-    # 1. Parse entity IDs (d18_k8_a → "Điều 18 Khoản 8 Điểm a")
+    # 1. Parse entity IDs
+    # Groups: (dieu_N_only, dN_num, kN_num, letter)
     for m in _RE_ENTITY_ID.finditer(valid_context_text):
-        full_id, dieu_num, khoan_num, diem_letter = m.groups()
+        dieu_only, d_num, k_num, diem_letter = m.groups()
+        dieu_num = dieu_only or d_num  # dieu_13 hoặc d13
         parts = []
         if dieu_num:
             parts.append(f"Điều {dieu_num}")
-        if khoan_num:
-            parts.append(f"Khoản {khoan_num}")
+        if k_num:
+            parts.append(f"Khoản {k_num}")
         if diem_letter:
             parts.append(f"Điểm {diem_letter}")
 
