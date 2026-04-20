@@ -12,12 +12,36 @@ Các API dùng chung cho toàn hệ thống, hiện được đặt ở `AppCont
 
 ### Query Parameters
 - `id` *(optional, string)*: ID node gốc dùng làm seed để truy vấn path 1..2 hops.
-- **Mặc định:** `d7_k7_c`.
+- **Mặc định:** `nd168_2024_d7_k7_c`.
+
+### Node ID Format (Mới)
+
+Hệ thống đã chuyển sang format ID mới với tiền tố `{doc_ref}_`:
+
+**Format:** `{doc_ref}_{structure}`
+
+**Document References:**
+- `nd168_2024`: Nghị định 168/2024/NĐ-CP
+- `l35_2024`: Luật Đường bộ 2024
+- `l36_2024`: Luật Trật tự, An toàn giao thông đường bộ 2024
+
+**Structure Patterns:**
+- Chỉ điều: `{doc_ref}_dieu_{N}`
+  - Ví dụ: `l35_2024_dieu_13`, `nd168_2024_dieu_7`
+- Điều + khoản: `{doc_ref}_d{N}_k{N}`
+  - Ví dụ: `nd168_2024_d7_k7`, `l35_2024_d13_k1`
+- Điều + khoản + điểm: `{doc_ref}_d{N}_k{N}_{letter}`
+  - Ví dụ: `nd168_2024_d7_k7_c`, `l35_2024_d13_k1_a`
+
+**Backward Compatibility:**
+- Format cũ (không có tiền tố) vẫn được hỗ trợ: `d7_k7_c`, `dieu_7`
+- Khuyến nghị sử dụng format mới cho tất cả queries
 
 ### Ví dụ gọi API
 - `GET /graph/demo`
-- `GET /graph/demo?id=d7_k7_c`
-- `GET /api/v1/graph/demo?id=d18_k8_a`
+- `GET /graph/demo?id=nd168_2024_d7_k7_c`
+- `GET /api/v1/graph/demo?id=l35_2024_dieu_13`
+- `GET /api/v1/graph/demo?id=nd168_2024_d18_k8_a`
 
 ### Cấu trúc Response
 Trả về cấu trúc chuẩn để trực quan hoá biểu đồ mạng (Network Graph). Số lượng node/cạnh là động theo `id`.

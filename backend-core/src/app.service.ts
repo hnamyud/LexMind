@@ -13,7 +13,7 @@ export class AppService {
   async getGraphDemo(id?: string) {
     const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
     const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
-    const seedId = id?.trim() || 'd7_k7';
+    const seedId = id?.trim() || 'nd168_2024_d7_k7';
     
     try {
       const response = await this.httpService.axiosRef.get(
