@@ -95,11 +95,18 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         raw = re.sub(r'^```(?:json)?\s*', '', raw)
         raw = re.sub(r'\s*```$', '', raw.strip())
         data = json.loads(raw)
-        route = data.get("route", "use_tool")
         allowed_routes = {"use_tool", "direct_answer", "absurd_logic", "out_of_domain"}
-        if route not in allowed_routes:
-            logging.warning(f"[STEP1a] route không hợp lệ: {route!r} — fallback use_tool")
-            route = "use_tool"
+
+        # Output validation (strict): chỉ chấp nhận JSON có đúng 1 field `route`
+        # và giá trị phải nằm trong enum cho phép.
+        is_valid_shape = isinstance(data, dict) and set(data.keys()) == {"route"}
+        route = data.get("route") if isinstance(data, dict) else None
+
+        if not is_valid_shape or route not in allowed_routes:
+            logging.warning(
+                f"[STEP1a] Router output không hợp lệ: data={data!r} — fallback out_of_domain"
+            )
+            route = "out_of_domain"
         response_style = "legal" if route == "use_tool" else "natural"
 
         logging.info(f"[STEP1a] route={route!r}, style={response_style!r}")

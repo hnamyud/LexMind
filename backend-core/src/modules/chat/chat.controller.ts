@@ -40,7 +40,6 @@ export class ChatController {
       questionDto.question,
       questionDto.conversationId as string,
       res,
-      questionDto.image,
     );
   }
 
