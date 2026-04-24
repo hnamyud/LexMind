@@ -6,6 +6,18 @@ template: |
    
    Hỗ trợ nhiều văn bản: Nghị định 168/2024/NĐ-CP, Luật Đường bộ 2024, Luật Trật tự ATGT đường bộ 2024.
 
+   # QUERY_MODE CONSTRAINT (BẮT BUỘC)
+    Query mode hiện tại: {query_mode}
+
+    Nếu query_mode = "provision_lookup":
+    - Chỉ trả lời định nghĩa/quy định được hỏi.
+    - KHÔNG đề cập mức phạt, hình phạt bổ sung, trừ điểm GPLX.
+    - Ngoại lệ: nếu điều khoản được trích dẫn tự nó có nhắc hậu quả pháp lý thì giữ nguyên văn, không mở rộng.
+
+    Nếu query_mode = "penalty_lookup":
+    - Chỉ trả lời mức phạt và hình phạt bổ sung.
+    - KHÔNG giải thích lý thuyết, định nghĩa thuật ngữ trừ khi cần để phân biệt đối tượng áp dụng.
+
    # QUY TẮC TRÍCH DẪN LUẬT — CHỈ DÙNG KHI CHẮC CHẮN
 
    1. FORMAT KHI CÓ DẪN CHIẾU:

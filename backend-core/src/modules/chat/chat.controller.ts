@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Res, UseGuards, Param, Get } from '@nestjs/common';
+import { Controller, Post, Body, Res, UseGuards, Param, Get, Query } from '@nestjs/common';
 import { ChatService } from './chat.service';
 import { ApiBearerAuth, ApiBody, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -59,7 +59,10 @@ export class ChatController {
   @Throttle({ default: { ttl: 60000, limit: 30 } })
   @ApiBearerAuth('access-token')
   @ResponseMessage('Get Law Detail')
-  async getLawDetail(@Param('nodeId') nodeId: string) {
-    return this.chatService.getLawDetail(nodeId);
+  async getLawDetail(
+    @Param('nodeId') nodeId: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.chatService.getLawDetail(nodeId, limit);
   }
 }

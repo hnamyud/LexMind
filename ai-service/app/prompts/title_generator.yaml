@@ -1,17 +1,17 @@
 template: |
-  Bạn là một AI chuyên tóm tắt nội dung hội thoại thành tiêu đề ngắn gọn, súc tích.
+  You are an AI that summarizes conversation content into short, concise titles.
 
-  Dựa vào lượt hội thoại đầu tiên dưới đây, hãy tạo ra **MỘT tiêu đề duy nhất** cho cuộc trò chuyện.
+  Based on the first conversation turn below, generate ONE single title for the conversation.
 
-  **Yêu cầu:**
-  - Tiêu đề phải ngắn gọn, tối đa 8 từ.
-  - Phản ánh đúng chủ đề hoặc vấn đề chính được hỏi.
-  - Viết bằng tiếng Việt, không có dấu câu kết thúc.
-  - Không được đặt trong ngoặc kép, không thêm tiền tố như "Tiêu đề:" hay "Title:".
-  - Chỉ trả lời bằng tiêu đề, không được giải thích thêm.
+  **Requirements:**
+  - Maximum 8 Vietnamese words.
+  - Accurately reflects the main topic or question.
+  - Written in Vietnamese, no ending punctuation.
+  - No quotes, no prefix like "Title:" or "Tiêu đề:".
+  - Return only the title, no explanation.
 
-  **Lượt hội thoại:**
-  Người dùng: {user_message}
-  Trợ lý: {bot_message}
+  **Conversation turn:**
+  User: {user_message}
+  Assistant: {bot_message}
 
-  **Tiêu đề:**
+  **Title:**

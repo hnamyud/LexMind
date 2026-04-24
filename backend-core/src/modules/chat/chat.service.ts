@@ -253,13 +253,20 @@ export class ChatService {
     });
   }
 
-  async getLawDetail(nodeId: string) {
+  async getLawDetail(nodeId: string, limit?: string) {
     const fastApiUrl = this.configService.get<string>('FASTAPI_URL');
     const fastApiPort = this.configService.get<string>('FASTAPI_PORT');
+    const parsedLimit = Number.parseInt(limit ?? '', 10);
+    const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 100)
+      : 25;
     
     try {
       const response = await this.httpService.axiosRef.get(
-        `http://${fastApiUrl}:${fastApiPort}/law-detail/${nodeId}`
+        `http://${fastApiUrl}:${fastApiPort}/law-detail/${nodeId}`,
+        {
+          params: { limit: safeLimit },
+        },
       );
       return response.data;
     } catch (err) {

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import neo4j
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, field_validator
@@ -137,15 +137,21 @@ async def invalidate_cache_by_tag(law_tag: str, request: Request):
 # ---------------------------------------------------------------------------
 
 @router.get("/law-detail/{node_id}", tags=["Graph"])
-async def get_law_detail(node_id: str, request: Request):
+async def get_law_detail(
+    node_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+):
     """Tra cứu chi tiết một node (điều luật, hành vi...) trong đồ thị Neo4j qua ID."""
     svc = _get_service(request)
     if not svc._driver:
         raise HTTPException(status_code=503, detail="Cơ sở dữ liệu đồ thị chưa được kết nối.")
     
-    # Truy vấn lấy properties của node, labels và các node liên quan (1-hop)
+    # Truy vấn lấy properties của node và giới hạn số node liên quan để tránh bùng bộ nhớ
     query = """
-    MATCH (start {id: $nodeId})-[:QUY_DINH_TAI|THUOC*0..]->(p)
+    MATCH (start {id: $nodeId})-[:QUY_DINH_TAI|THUOC*0..2]->(p)
+    WITH DISTINCT p
+    LIMIT $limit
     RETURN collect(p) AS hierarchy
     """
     
@@ -154,7 +160,7 @@ async def get_law_detail(node_id: str, request: Request):
             database=settings.NEO4J_DATABASE,
             default_access_mode=neo4j.READ_ACCESS,
         ) as session:
-            result = await session.run(query, nodeId=node_id)
+            result = await session.run(query, nodeId=node_id, limit=limit)
             records = await result.data()
             
         if not records or not records[0].get("hierarchy"):

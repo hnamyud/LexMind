@@ -6,7 +6,7 @@
 |----------|--------|---------------------|------------|-------|
 | `/ask/stream` | `POST` | `JWT Bearer`, `<ConversationOwnerGuard>` | 5 req / 60s | Gửi câu hỏi cho AI và nhận câu trả lời dạng Server-Sent Events (SSE). Body yêu cầu `question` và `conversationId`. |
 | `/regenerate/:messageId` | `POST` | `JWT Bearer` | 5 req / 60s | Yêu cầu AI tạo lại (regenerate) câu trả lời cho một tin nhắn lỗi. Cần truyền vào tham số param `messageId`. |
-| `/law-detail/:nodeId` | `GET` | `JWT Bearer` | 30 req / 60s | Lấy chi tiết thông tin luật giao thông trực tiếp từ Neo4j Knowledge Graph thông qua ID của node (điều/khoản). |
+| `/law-detail/:nodeId` | `GET` | `JWT Bearer` | 30 req / 60s | Lấy chi tiết thông tin luật giao thông trực tiếp từ Neo4j Knowledge Graph thông qua ID của node (điều/khoản). Hỗ trợ query param `limit` để giới hạn số node trả về, mặc định 25. |
 
 ## Ghi chú
 - API `/ask/stream` được phân luồng xử lý chặt chẽ. Backend sẽ Proxy stream dạng NDJSON từ FastAPI (AI service) biến đổi thành chuẩn SSE đến Frontend Client để render typing effect realtime.

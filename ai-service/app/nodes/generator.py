@@ -38,6 +38,8 @@ async def _node_generator(self, state: dict) -> dict:
     messages = list(state.get("messages", []))
     context = state.get("context", "")
     style = state.get("response_style", "legal")
+    entities = state.get("entities") or {}
+    query_mode = entities.get("query_mode", "penalty_lookup")
 
     # 1. Tách SystemMessage cũ ra khỏi tin nhắn User/AI để không bị cắt xoá
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
@@ -55,6 +57,10 @@ async def _node_generator(self, state: dict) -> dict:
         chosen_prompt = self._system_prompt
     else:
         chosen_prompt = self._natural_prompt
+
+    # Inject query_mode into synthesis templates when placeholder is present.
+    if "{query_mode}" in chosen_prompt:
+        chosen_prompt = chosen_prompt.format(query_mode=query_mode)
 
     # 4. Ghép lại danh sách messages cho LLM
     messages_to_llm = system_msgs + recent_chat_msgs
