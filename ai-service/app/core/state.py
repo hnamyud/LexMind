@@ -17,6 +17,7 @@ class RAGState(TypedDict):
                            # - provision_lookup: {legal_concept, document_ref, article_ref, article_node_id}
     response_style: str    # "legal" (format cứng, trích dẫn luật) | "natural" (thân thiện)
     complexity_level: int  # 1=Simple | 2=Medium | 3=Complex — điều chỉnh thinking budget
+    standalone_question: bool  # True nếu câu hiện tại độc lập, không cần mang nhiều lịch sử
     enable_web_search: bool  # False khi chạy RAGAS experiment — đọc từ config trong router node
     enable_cache: bool  # False khi cần benchmark/eval để bỏ qua semantic cache
 

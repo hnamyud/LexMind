@@ -22,6 +22,26 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from .base import _extract_ai_text
 
 
+_META_SYSTEM_QUERY_PATTERNS: tuple[str, ...] = (
+    r"\b(prompt|system prompt|developer prompt|hidden prompt)\b",
+    r"\b(chain[ -]?of[ -]?thought|cot|reasoning)\b",
+    r"\b(quy tắc bắt buộc|nguyên tắc nội bộ|cơ chế nội bộ|luật nội bộ)\b",
+    r"\b(audit nội bộ|kiểm thử bảo mật|security audit|pentest)\b",
+    r"\b(nguyên tắc bạn tuân theo|quy tắc của bạn|chính sách nội bộ)\b",
+    r"\b(bạn bị cấm làm gì|nguyên tắc ẩn|hướng dẫn nội bộ)\b",
+    r"\b(in ra|show|dump|xuất ra).*(prompt|rule|quy tắc|hướng dẫn)\b",
+    r"\b(liệt kê|mô tả|cho biết).*(quy tắc|nguyên tắc|cơ chế|policy)\b",
+    r"\b(bỏ qua|ignore).*(hướng dẫn|instructions|system)\b",
+)
+
+
+def _is_meta_or_injection_query(text: str) -> bool:
+    q = (text or "").lower()
+    if not q:
+        return False
+    return any(re.search(p, q, re.IGNORECASE) for p in _META_SYSTEM_QUERY_PATTERNS)
+
+
 async def _node_router(self, state: dict, config: RunnableConfig | None = None) -> dict:
     """
         Step 1a: Phân loại câu hỏi vào 4 nhóm:
@@ -49,6 +69,7 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         return {
             "route": "direct_answer",
             "response_style": "natural",
+            "standalone_question": True,
             "enable_web_search": enable_web_search,
             "enable_cache": enable_cache,
         }
@@ -63,8 +84,25 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         return {
             "route": "direct_answer",
             "response_style": "natural",
+            "standalone_question": True,
             "enable_web_search": enable_web_search,
             "enable_cache": enable_cache,
+        }
+
+    # Hard block: chặn truy vấn cơ chế nội bộ/prompt injection probing
+    # để tránh đi sâu vào generator và bị partial leak.
+    if _is_meta_or_injection_query(last_question):
+        logging.warning("[STEP1a] Meta/injection probing detected — force out_of_domain")
+        return {
+            "route": "out_of_domain",
+            "response_style": "natural",
+            "standalone_question": True,
+            "enable_web_search": enable_web_search,
+            "enable_cache": enable_cache,
+            "legal_query": "",
+            "entities": {},
+            "sub_queries": [],
+            "complexity_level": 1,
         }
 
     # Truncate AI responses dài để giữ prompt nhỏ
@@ -113,6 +151,7 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         return {
             "route": route,
             "response_style": response_style,
+            "standalone_question": True,
             "enable_web_search": enable_web_search,
             "enable_cache": enable_cache,
             # Reset các field rewrite để tránh sót state cũ
@@ -128,6 +167,7 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         return {
             "route": "use_tool",
             "response_style": "legal",
+            "standalone_question": True,
             "enable_web_search": enable_web_search,
             "enable_cache": enable_cache,
             "legal_query": "",
@@ -140,6 +180,7 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
         return {
             "route": "use_tool",
             "response_style": "legal",
+            "standalone_question": True,
             "enable_web_search": enable_web_search,
             "enable_cache": enable_cache,
             "legal_query": "",

@@ -21,6 +21,41 @@ from langchain_core.messages import HumanMessage
 from .base import _extract_ai_text
 
 
+_ALLOWED_REFLECTOR_VERDICTS = {"sufficient", "needs_clarification", "not_found"}
+
+
+def _validate_reflector_payload(data: dict) -> tuple[bool, str]:
+    """Strict validate payload shape/output cho reflector LLM."""
+    if not isinstance(data, dict):
+        return False, "payload không phải object"
+
+    required_keys = {"verdict", "clarification_question", "trigger_search"}
+    extra_keys = set(data.keys()) - required_keys
+    missing_keys = required_keys - set(data.keys())
+
+    if missing_keys:
+        return False, f"thiếu keys bắt buộc: {sorted(missing_keys)}"
+    if extra_keys:
+        return False, f"thừa keys không cho phép: {sorted(extra_keys)}"
+
+    verdict = data.get("verdict")
+    if verdict not in _ALLOWED_REFLECTOR_VERDICTS:
+        return False, f"verdict không hợp lệ: {verdict!r}"
+
+    clarification_question = data.get("clarification_question")
+    if not isinstance(clarification_question, str):
+        return False, "clarification_question phải là string"
+
+    trigger_search = data.get("trigger_search")
+    if not isinstance(trigger_search, bool):
+        return False, "trigger_search phải là boolean"
+
+    if verdict != "needs_clarification" and clarification_question.strip():
+        return False, "clarification_question phải rỗng khi verdict != needs_clarification"
+
+    return True, ""
+
+
 # ---------------------------------------------------------------------------
 # Heuristic constants
 # ---------------------------------------------------------------------------
@@ -239,6 +274,10 @@ async def _node_reflector(self, state: dict) -> dict:
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw.strip())
         data = json.loads(raw)
+        is_valid, reason = _validate_reflector_payload(data)
+        if not is_valid:
+            raise ValueError(f"reflector payload invalid: {reason}")
+
         verdict = data.get("verdict", "sufficient")
         clarification_q = data.get("clarification_question", "")
         trigger_search = data.get("trigger_search", False)

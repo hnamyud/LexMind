@@ -7,8 +7,28 @@ Option B: hàm nhận `self` (RAGService instance) làm tham số đầu tiên.
 """
 
 import logging
+import re
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+
+_INJECTION_PATTERNS: tuple[str, ...] = (
+    r"\bignore\s+previous\s+instructions\b",
+    r"\bsystem\s*:\b",
+    r"\bdeveloper\s*:\b",
+    r"\bact\s+as\b",
+    r"\breveal\s+(?:hidden\s+)?prompt\b",
+    r"\bchain[ -]?of[ -]?thought\b",
+    r"\bbỏ qua\s+hướng dẫn\b",
+    r"\bin ra\s+.*(?:quy tắc|prompt|hướng dẫn)\b",
+)
+
+
+def _looks_like_injection(text: str) -> bool:
+    q = (text or "").lower()
+    if not q:
+        return False
+    return any(re.search(p, q, re.IGNORECASE) for p in _INJECTION_PATTERNS)
 
 
 async def _node_generator(self, state: dict) -> dict:
@@ -38,6 +58,26 @@ async def _node_generator(self, state: dict) -> dict:
     messages = list(state.get("messages", []))
     context = state.get("context", "")
     style = state.get("response_style", "legal")
+    standalone_question = bool(state.get("standalone_question", False))
+
+    # Hard safety guard: nếu user gửi chuỗi dạng injection probing,
+    # trả lời từ chối ngắn gọn, không đi vào LLM để tránh khuếch đại chuỗi độc hại.
+    last_user = ""
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            last_user = m.content if isinstance(m.content, str) else str(m.content)
+            break
+    if _looks_like_injection(last_user):
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Mình không thể hỗ trợ các yêu cầu can thiệp cơ chế nội bộ hoặc thay đổi chỉ dẫn hệ thống. "
+                        "Nếu bạn muốn, mình có thể hỗ trợ câu hỏi pháp lý giao thông cụ thể."
+                    )
+                )
+            ]
+        }
     entities = state.get("entities") or {}
     query_mode = entities.get("query_mode", "penalty_lookup")
 
@@ -45,22 +85,39 @@ async def _node_generator(self, state: dict) -> dict:
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
 
-    # 2. Giữ 4 tin nhắn lịch sử gần nhất (2 lượt chat)
-    recent_chat_msgs = chat_msgs[-4:]
+    # 2. Lấy lịch sử chat theo cờ standalone_question
+    # - standalone=True  -> chỉ giữ câu hỏi user mới nhất, tránh kéo ngữ cảnh cũ
+    # - standalone=False -> giữ 4 tin gần nhất như cũ
+    if standalone_question:
+        latest_human_msg = None
+        for m in reversed(chat_msgs):
+            if isinstance(m, HumanMessage):
+                latest_human_msg = m
+                break
+        recent_chat_msgs = [latest_human_msg] if latest_human_msg else chat_msgs[-1:]
+    else:
+        recent_chat_msgs = chat_msgs[-4:]
 
-    # 3. Chọn system prompt theo response_style + độ phức tạp
-    # level 1 + single violation => dùng prompt rút gọn để trả lời nhanh cho 1 hành vi
+    # 3. Chọn system prompt theo response_style + query_mode + độ phức tạp
+    # Chỉ dùng compact cho penalty_lookup đơn giản.
+    # provision_lookup luôn dùng prompt đầy đủ để giữ citation ổn định.
     is_single_violation = len(state.get("sub_queries", [])) == 0
-    if style == "legal" and complexity_level == 1 and is_single_violation:
+    if (
+        style == "legal"
+        and query_mode == "penalty_lookup"
+        and complexity_level == 1
+        and is_single_violation
+    ):
         chosen_prompt = self._system_prompt_compact
     elif style == "legal":
         chosen_prompt = self._system_prompt
     else:
         chosen_prompt = self._natural_prompt
 
-    # Inject query_mode into synthesis templates when placeholder is present.
+    # Inject query_mode an toàn bằng replace (không dùng format)
+    # để tránh KeyError với các literal như {doc_ref} trong prompt text.
     if "{query_mode}" in chosen_prompt:
-        chosen_prompt = chosen_prompt.format(query_mode=query_mode)
+        chosen_prompt = chosen_prompt.replace("{query_mode}", str(query_mode or "penalty_lookup"))
 
     # 4. Ghép lại danh sách messages cho LLM
     messages_to_llm = system_msgs + recent_chat_msgs

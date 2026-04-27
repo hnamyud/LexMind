@@ -15,8 +15,29 @@ Streaming note:
 """
 
 import logging
+import re
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+
+
+_META_SYSTEM_QUERY_PATTERNS: tuple[str, ...] = (
+    r"\b(prompt|system prompt|developer prompt|hidden prompt)\b",
+    r"\b(chain[ -]?of[ -]?thought|cot|reasoning)\b",
+    r"\b(quy tắc bắt buộc|nguyên tắc nội bộ|cơ chế nội bộ|luật nội bộ)\b",
+    r"\b(audit nội bộ|kiểm thử bảo mật|security audit|pentest)\b",
+    r"\b(nguyên tắc bạn tuân theo|quy tắc của bạn|chính sách nội bộ)\b",
+    r"\b(bạn bị cấm làm gì|nguyên tắc ẩn|hướng dẫn nội bộ)\b",
+    r"\b(in ra|show|dump|xuất ra).*(prompt|rule|quy tắc|hướng dẫn)\b",
+    r"\b(liệt kê|mô tả|cho biết).*(quy tắc|nguyên tắc|cơ chế|policy)\b",
+    r"\b(bỏ qua|ignore).*(hướng dẫn|instructions|system)\b",
+)
+
+
+def _is_meta_or_injection_query(text: str) -> bool:
+    q = (text or "").lower()
+    if not q:
+        return False
+    return any(re.search(p, q, re.IGNORECASE) for p in _META_SYSTEM_QUERY_PATTERNS)
 
 
 async def _node_agent_direct(self, state: dict) -> dict:
@@ -30,6 +51,26 @@ async def _node_agent_direct(self, state: dict) -> dict:
       - temperature=0.7 → câu trả lời tự nhiên, không cứng nhắc
     """
     messages = list(state.get("messages", []))
+
+    # Defense-in-depth: chặn truy vấn probe cơ chế nội bộ/prompt injection
+    # ngay cả khi router classify miss.
+    last_user = ""
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            last_user = m.content if isinstance(m.content, str) else str(m.content)
+            break
+    if _is_meta_or_injection_query(last_user):
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Mình không thể cung cấp hoặc mô tả các quy tắc nội bộ, "
+                        "cơ chế bảo mật, hay hướng dẫn vận hành của hệ thống. "
+                        "Nếu bạn muốn, mình có thể hỗ trợ câu hỏi pháp lý giao thông cụ thể."
+                    )
+                )
+            ]
+        }
 
     system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
