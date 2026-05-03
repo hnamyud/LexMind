@@ -34,6 +34,9 @@ class RAGState(TypedDict):
     reflection: str              # "sufficient" | "needs_clarification" | "not_found"
     clarification_question: str  # câu hỏi ngược lại cho user (nếu needs_clarification)
     trigger_search: bool         # True nếu Graph data không khớp → force web search
+    awaiting_clarification: bool  # True khi bot vừa hỏi ngược và chờ user xác nhận/bổ sung
+    clarification_kind: str       # loại clarifier, ví dụ: confirm_interpretation
+    clarification_payload: dict   # payload hỗ trợ resolve turn xác nhận ngắn
 
     # ── Web sources (khi dùng web search fallback) ────────────────────────────
     web_sources: List[dict]      # [{url, title}, ...] — nguồn web đã tham khảo

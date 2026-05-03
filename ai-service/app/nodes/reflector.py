@@ -117,7 +117,7 @@ def _is_high_confidence_penalty_context(context: str, entities: dict) -> bool:
     2. Context đến từ graph retrieval (retrieval markers)
     3. Context liên quan đến đúng vi phạm và loại xe user hỏi
     """
-    ctx_lower = context.lower()
+    ctx_lower = (context or "").lower()
 
     if not any(kw in ctx_lower for kw in _PENALTY_KEYWORDS):
         return False
@@ -125,7 +125,7 @@ def _is_high_confidence_penalty_context(context: str, entities: dict) -> bool:
     if not any(marker in ctx_lower for marker in _RETRIEVAL_MARKERS):
         return False
 
-    violation = entities.get("violation", "").lower()
+    violation = (entities.get("violation") or "").lower()
     if violation:
         keywords = [w for w in violation.split() if len(w) > 3][:3]
         if keywords and not any(kw in ctx_lower for kw in keywords):
@@ -135,7 +135,7 @@ def _is_high_confidence_penalty_context(context: str, entities: dict) -> bool:
             )
             return False
 
-    vehicle_type = entities.get("vehicle_type", "").lower()
+    vehicle_type = (entities.get("vehicle_type") or "").lower()
     if vehicle_type:
         aliases = _VEHICLE_ALIASES.get(vehicle_type, [vehicle_type])
         if not any(alias in ctx_lower for alias in aliases):
@@ -156,7 +156,7 @@ def _is_high_confidence_provision_context(context: str, entities: dict) -> bool:
     3. Nếu có legal_concept, nó xuất hiện trong context
     4. Nếu có document_ref, doc_ref khớp trong context
     """
-    ctx_lower = context.lower()
+    ctx_lower = (context or "").lower()
 
     if not any(marker in ctx_lower for marker in _RETRIEVAL_MARKERS):
         return False
@@ -164,7 +164,7 @@ def _is_high_confidence_provision_context(context: str, entities: dict) -> bool:
     if not any(kw in ctx_lower for kw in _PROVISION_KEYWORDS):
         return False
 
-    legal_concept = entities.get("legal_concept", "").lower()
+    legal_concept = (entities.get("legal_concept") or "").lower()
     if legal_concept:
         concept_words = [w for w in legal_concept.split() if len(w) > 2][:3]
         if concept_words and not any(w in ctx_lower for w in concept_words):

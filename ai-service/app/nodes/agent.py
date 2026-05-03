@@ -15,29 +15,9 @@ Streaming note:
 """
 
 import logging
-import re
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
-
-
-_META_SYSTEM_QUERY_PATTERNS: tuple[str, ...] = (
-    r"\b(prompt|system prompt|developer prompt|hidden prompt)\b",
-    r"\b(chain[ -]?of[ -]?thought|cot|reasoning)\b",
-    r"\b(quy tắc bắt buộc|nguyên tắc nội bộ|cơ chế nội bộ|luật nội bộ)\b",
-    r"\b(audit nội bộ|kiểm thử bảo mật|security audit|pentest)\b",
-    r"\b(nguyên tắc bạn tuân theo|quy tắc của bạn|chính sách nội bộ)\b",
-    r"\b(bạn bị cấm làm gì|nguyên tắc ẩn|hướng dẫn nội bộ)\b",
-    r"\b(in ra|show|dump|xuất ra).*(prompt|rule|quy tắc|hướng dẫn)\b",
-    r"\b(liệt kê|mô tả|cho biết).*(quy tắc|nguyên tắc|cơ chế|policy)\b",
-    r"\b(bỏ qua|ignore).*(hướng dẫn|instructions|system)\b",
-)
-
-
-def _is_meta_or_injection_query(text: str) -> bool:
-    q = (text or "").lower()
-    if not q:
-        return False
-    return any(re.search(p, q, re.IGNORECASE) for p in _META_SYSTEM_QUERY_PATTERNS)
+from .safety import is_meta_or_injection_query, generic_refusal_message
 
 
 async def _node_agent_direct(self, state: dict) -> dict:
@@ -59,28 +39,14 @@ async def _node_agent_direct(self, state: dict) -> dict:
         if isinstance(m, HumanMessage):
             last_user = m.content if isinstance(m.content, str) else str(m.content)
             break
-    if _is_meta_or_injection_query(last_user):
-        return {
-            "messages": [
-                AIMessage(
-                    content=(
-                        "Mình không thể cung cấp hoặc mô tả các quy tắc nội bộ, "
-                        "cơ chế bảo mật, hay hướng dẫn vận hành của hệ thống. "
-                        "Nếu bạn muốn, mình có thể hỗ trợ câu hỏi pháp lý giao thông cụ thể."
-                    )
-                )
-            ]
-        }
+    if is_meta_or_injection_query(last_user):
+        return {"messages": [AIMessage(content=generic_refusal_message())]}
 
-    system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
     chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
     recent_chat_msgs = chat_msgs[-4:]
 
-    messages_to_llm = system_msgs + recent_chat_msgs
-
-    # Agent Direct luôn dùng natural prompt (thân thiện)
-    if not any(isinstance(m, SystemMessage) for m in messages_to_llm):
-        messages_to_llm = [SystemMessage(content=self._natural_prompt)] + messages_to_llm
+    # Không forward SystemMessage cũ từ history để tránh leak nội bộ.
+    messages_to_llm = [SystemMessage(content=self._natural_prompt)] + recent_chat_msgs
 
     try:
         # ainvoke với streaming=True: LangGraph tự phát on_chat_model_stream
@@ -111,4 +77,12 @@ async def _node_clarifier(self, state: dict) -> dict:
         "clarification_question",
         "Bạn có thể cung cấp thêm thông tin để tôi tư vấn chính xác hơn không?",
     )
-    return {"messages": [AIMessage(content=clarification_q)]}
+    return {
+        "messages": [AIMessage(content=clarification_q)],
+        "awaiting_clarification": True,
+        "clarification_kind": "confirm_interpretation",
+        "clarification_payload": {
+            "resolved_question_text": state.get("legal_query", "").strip(),
+            "resolved_entities": state.get("entities", {}) or {},
+        },
+    }

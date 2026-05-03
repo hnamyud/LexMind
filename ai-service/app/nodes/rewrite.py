@@ -39,7 +39,14 @@ def _validate_rewrite_payload(data: dict) -> tuple[bool, str]:
     if not isinstance(data, dict):
         return False, "payload không phải object"
 
-    required_keys = {"query_mode", "legal_query", "entities", "sub_queries", "complexity_level"}
+    required_keys = {
+        "query_mode",
+        "legal_query",
+        "entities",
+        "sub_queries",
+        "complexity_level",
+        "standalone_question",
+    }
     extra_keys = set(data.keys()) - required_keys
     missing_keys = required_keys - set(data.keys())
     if missing_keys:
@@ -66,6 +73,10 @@ def _validate_rewrite_payload(data: dict) -> tuple[bool, str]:
     complexity_level = data.get("complexity_level")
     if not isinstance(complexity_level, int) or complexity_level not in (1, 2, 3):
         return False, f"complexity_level không hợp lệ: {complexity_level!r}"
+
+    standalone_question = data.get("standalone_question")
+    if not isinstance(standalone_question, bool):
+        return False, f"standalone_question không hợp lệ: {standalone_question!r}"
 
     if query_mode == "penalty_lookup":
         allowed_entity_keys = {"violation", "vehicle_type", "subject", "conditions"}
@@ -239,7 +250,7 @@ async def _node_rewrite(self, state: dict) -> dict:
         elif len(validated_subs) == 1 and complexity_level < 2:
             complexity_level = 2
 
-        standalone_question = _is_standalone_question(last_question)
+        standalone_question = data.get("standalone_question")
 
         logging.info(
             f"[STEP1b] query_mode={query_mode}, legal_query={legal_query!r}, "

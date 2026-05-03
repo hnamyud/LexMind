@@ -20,26 +20,8 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 from .base import _extract_ai_text
-
-
-_META_SYSTEM_QUERY_PATTERNS: tuple[str, ...] = (
-    r"\b(prompt|system prompt|developer prompt|hidden prompt)\b",
-    r"\b(chain[ -]?of[ -]?thought|cot|reasoning)\b",
-    r"\b(quy tắc bắt buộc|nguyên tắc nội bộ|cơ chế nội bộ|luật nội bộ)\b",
-    r"\b(audit nội bộ|kiểm thử bảo mật|security audit|pentest)\b",
-    r"\b(nguyên tắc bạn tuân theo|quy tắc của bạn|chính sách nội bộ)\b",
-    r"\b(bạn bị cấm làm gì|nguyên tắc ẩn|hướng dẫn nội bộ)\b",
-    r"\b(in ra|show|dump|xuất ra).*(prompt|rule|quy tắc|hướng dẫn)\b",
-    r"\b(liệt kê|mô tả|cho biết).*(quy tắc|nguyên tắc|cơ chế|policy)\b",
-    r"\b(bỏ qua|ignore).*(hướng dẫn|instructions|system)\b",
-)
-
-
-def _is_meta_or_injection_query(text: str) -> bool:
-    q = (text or "").lower()
-    if not q:
-        return False
-    return any(re.search(p, q, re.IGNORECASE) for p in _META_SYSTEM_QUERY_PATTERNS)
+from .safety import is_meta_or_injection_query
+from .followup import normalize_clarification_reply
 
 
 async def _node_router(self, state: dict, config: RunnableConfig | None = None) -> dict:
@@ -89,9 +71,49 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
             "enable_cache": enable_cache,
         }
 
+    # Resolve xác nhận ngắn khi đang chờ clarifier
+    awaiting_clarification = bool(state.get("awaiting_clarification", False))
+    if awaiting_clarification:
+        parsed = normalize_clarification_reply(last_question)
+        reply_type = parsed.get("reply_type", "normal")
+        remaining_text = parsed.get("remaining_text", "")
+        payload = state.get("clarification_payload", {}) or {}
+
+        if reply_type == "confirm_only":
+            resolved_q = (payload.get("resolved_question_text") or "").strip()
+            if resolved_q:
+                return {
+                    "route": "use_tool",
+                    "response_style": "legal",
+                    "standalone_question": False,
+                    "enable_web_search": enable_web_search,
+                    "enable_cache": enable_cache,
+                    "legal_query": resolved_q,
+                    "entities": payload.get("resolved_entities", {}),
+                    "awaiting_clarification": False,
+                    "clarification_kind": "",
+                    "clarification_payload": {},
+                }
+
+        if reply_type in ("confirm_with_content", "deny_with_content") and remaining_text:
+            # Rewrite câu hiện tại thành phần nội dung có nghĩa để downstream xử lý.
+            last_question = remaining_text
+
+        if reply_type == "deny_only":
+            return {
+                "route": "direct_answer",
+                "response_style": "natural",
+                "standalone_question": True,
+                "enable_web_search": enable_web_search,
+                "enable_cache": enable_cache,
+                "awaiting_clarification": False,
+                "clarification_kind": "",
+                "clarification_payload": {},
+            }
+
     # Hard block: chặn truy vấn cơ chế nội bộ/prompt injection probing
     # để tránh đi sâu vào generator và bị partial leak.
-    if _is_meta_or_injection_query(last_question):
+    if is_meta_or_injection_query(last_question):
         logging.warning("[STEP1a] Meta/injection probing detected — force out_of_domain")
         return {
             "route": "out_of_domain",
@@ -103,6 +125,9 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
             "entities": {},
             "sub_queries": [],
             "complexity_level": 1,
+            "awaiting_clarification": False,
+            "clarification_kind": "",
+            "clarification_payload": {},
         }
 
     # Truncate AI responses dài để giữ prompt nhỏ
@@ -159,6 +184,9 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
             "entities": {},
             "sub_queries": [],
             "complexity_level": 1,
+            "awaiting_clarification": False,
+            "clarification_kind": "",
+            "clarification_payload": {},
         }
     except asyncio.TimeoutError:
         logging.warning(
@@ -174,6 +202,9 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
             "entities": {},
             "sub_queries": [],
             "complexity_level": 2,
+            "awaiting_clarification": False,
+            "clarification_kind": "",
+            "clarification_payload": {},
         }
     except Exception as e:
         logging.error(f"[STEP1a] Lỗi: {e} — fallback use_tool")
@@ -187,4 +218,7 @@ async def _node_router(self, state: dict, config: RunnableConfig | None = None) 
             "entities": {},
             "sub_queries": [],
             "complexity_level": 2,
+            "awaiting_clarification": False,
+            "clarification_kind": "",
+            "clarification_payload": {},
         }

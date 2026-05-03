@@ -7,28 +7,9 @@ Option B: hàm nhận `self` (RAGService instance) làm tham số đầu tiên.
 """
 
 import logging
-import re
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-
-
-_INJECTION_PATTERNS: tuple[str, ...] = (
-    r"\bignore\s+previous\s+instructions\b",
-    r"\bsystem\s*:\b",
-    r"\bdeveloper\s*:\b",
-    r"\bact\s+as\b",
-    r"\breveal\s+(?:hidden\s+)?prompt\b",
-    r"\bchain[ -]?of[ -]?thought\b",
-    r"\bbỏ qua\s+hướng dẫn\b",
-    r"\bin ra\s+.*(?:quy tắc|prompt|hướng dẫn)\b",
-)
-
-
-def _looks_like_injection(text: str) -> bool:
-    q = (text or "").lower()
-    if not q:
-        return False
-    return any(re.search(p, q, re.IGNORECASE) for p in _INJECTION_PATTERNS)
+from .safety import is_meta_or_injection_query, generic_refusal_message
 
 
 async def _node_generator(self, state: dict) -> dict:
@@ -67,22 +48,12 @@ async def _node_generator(self, state: dict) -> dict:
         if isinstance(m, HumanMessage):
             last_user = m.content if isinstance(m.content, str) else str(m.content)
             break
-    if _looks_like_injection(last_user):
-        return {
-            "messages": [
-                AIMessage(
-                    content=(
-                        "Mình không thể hỗ trợ các yêu cầu can thiệp cơ chế nội bộ hoặc thay đổi chỉ dẫn hệ thống. "
-                        "Nếu bạn muốn, mình có thể hỗ trợ câu hỏi pháp lý giao thông cụ thể."
-                    )
-                )
-            ]
-        }
+    if is_meta_or_injection_query(last_user):
+        return {"messages": [AIMessage(content=generic_refusal_message())]}
     entities = state.get("entities") or {}
     query_mode = entities.get("query_mode", "penalty_lookup")
 
-    # 1. Tách SystemMessage cũ ra khỏi tin nhắn User/AI để không bị cắt xoá
-    system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+    # 1. Chỉ giữ chat history (không forward SystemMessage cũ)
     chat_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
 
     # 2. Lấy lịch sử chat theo cờ standalone_question
@@ -119,11 +90,8 @@ async def _node_generator(self, state: dict) -> dict:
     if "{query_mode}" in chosen_prompt:
         chosen_prompt = chosen_prompt.replace("{query_mode}", str(query_mode or "penalty_lookup"))
 
-    # 4. Ghép lại danh sách messages cho LLM
-    messages_to_llm = system_msgs + recent_chat_msgs
-
-    if not any(isinstance(m, SystemMessage) for m in messages_to_llm):
-        messages_to_llm = [SystemMessage(content=chosen_prompt)] + messages_to_llm
+    # 4. Ghép lại danh sách messages cho LLM (single current system prompt)
+    messages_to_llm = [SystemMessage(content=chosen_prompt)] + recent_chat_msgs
 
     if context:
         messages_to_llm = messages_to_llm + [

@@ -15,7 +15,7 @@ async def _node_web_search_fallback(self, state: dict) -> dict:
     """Step 3c: Tìm kiếm web khi Neo4j không có dữ liệu về hành vi."""
     messages = state.get("messages", [])
     question = ""
-    for msg in messages:
+    for msg in reversed(messages):
         if isinstance(msg, HumanMessage):
             question = msg.content if isinstance(msg.content, str) else str(msg.content)
             break
