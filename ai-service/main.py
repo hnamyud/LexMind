@@ -62,12 +62,21 @@ async def lifespan(app: FastAPI):
     app.state.rag_service = svc
     app.state.checkpointer = checkpointer
 
-    # Bước 3: Khởi tạo Eval pipeline
-    logging.info("⏳ Đang khởi tạo Eval service...")
-    pool = checkpointer.conn  # Tái dụng cùng AsyncConnectionPool
-    await run_eval_migrations(pool)
-    app.state.eval_service = EvalService(pool=pool, rag_service=svc)
-    app.state.eval_pool = pool
+    # Bước 3: Khởi tạo Eval pipeline (non-critical, có thể tắt qua env)
+    app.state.eval_service = None
+    app.state.eval_pool = None
+    if settings.ENABLE_EVAL_BOOT:
+        try:
+            logging.info("⏳ Đang khởi tạo Eval service...")
+            pool = checkpointer.conn  # Tái dụng cùng AsyncConnectionPool
+            await run_eval_migrations(pool)
+            app.state.eval_service = EvalService(pool=pool, rag_service=svc)
+            app.state.eval_pool = pool
+            logging.info("✅ Eval service đã sẵn sàng")
+        except Exception as e:
+            logging.warning(f"⚠️  Bỏ qua Eval service khi startup (non-critical): {e}")
+    else:
+        logging.info("ℹ️  ENABLE_EVAL_BOOT=false — bỏ qua khởi tạo Eval service")
 
     logging.info("✅ Toàn bộ service đã sẵn sàng!")
 

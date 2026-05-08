@@ -17,6 +17,38 @@ import re
 # ---------------------------------------------------------------------------
 
 _RE_GRAPH_SOURCE = re.compile(r'<source\s+id="([^"]+)"\s+score="([\d.]+)"')
+_RE_CANONICAL_NODE_ID = re.compile(r"<canonical_node_id>([^<]+)</canonical_node_id>", re.IGNORECASE)
+_RE_CANONICAL_NODE_IDS = re.compile(r"<canonical_node_ids>([^<]+)</canonical_node_ids>", re.IGNORECASE)
+_RE_PATH = re.compile(r"<path>([^<]+)</path>", re.IGNORECASE)
+
+
+def _node_id_from_path(path: str) -> str | None:
+    path = (path or "").replace("&gt;", ">").replace("&amp;", "&").strip()
+    if not path:
+        return None
+
+    low = path.lower()
+    if "nghị định 168" in low or "nghi dinh 168" in low:
+        doc_ref = "nd168_2024"
+    elif "luật trật tự" in low or "luat trat tu" in low:
+        doc_ref = "l36_2024"
+    elif "luật đường bộ" in low or "luat duong bo" in low:
+        doc_ref = "l35_2024"
+    else:
+        return None
+
+    article_m = re.search(r"Điều\s*(\d+)", path, re.IGNORECASE)
+    clause_m = re.search(r"Khoản\s*(\d+)", path, re.IGNORECASE)
+    point_m = re.search(r"Điểm\s*([a-zđ])", path, re.IGNORECASE)
+    if not article_m:
+        return None
+
+    node_id = f"{doc_ref}_d{article_m.group(1)}"
+    if clause_m:
+        node_id += f"_k{clause_m.group(1)}"
+    if point_m:
+        node_id += f"_{point_m.group(1).lower()}"
+    return node_id
 _RE_WEB_URL = re.compile(r"^URL\s*:\s*(https?://\S+)", re.MULTILINE)
 
 # Nhận diện các chuỗi chứa "Điều", "Khoản", "Điểm" (có thể độc lập hoặc kết hợp)
@@ -127,10 +159,53 @@ def parse_legal_anchors(context: str) -> list[str]:
 
 def extract_graph_sources(context: str) -> list[dict]:
     """Trích xuất nguồn từ Neo4j graph retrieval results (XML format)."""
-    return [
-        {"type": "knowledge_graph", "id": m.group(1), "score": float(m.group(2))}
-        for m in _RE_GRAPH_SOURCE.finditer(context)
-    ]
+    if not context:
+        return []
+
+    headers = list(_RE_GRAPH_SOURCE.finditer(context))
+    if not headers:
+        return []
+
+    sources: list[dict] = []
+    for i, m in enumerate(headers):
+        start = m.start()
+        end = headers[i + 1].start() if i + 1 < len(headers) else len(context)
+        block = context[start:end]
+
+        node_id = m.group(1)
+        score = float(m.group(2))
+
+        canonical_node_id = None
+        canonical_node_ids: list[str] = []
+        path = None
+
+        cm = _RE_CANONICAL_NODE_ID.search(block)
+        if cm:
+            canonical_node_id = cm.group(1).strip()
+
+        cms = _RE_CANONICAL_NODE_IDS.search(block)
+        if cms:
+            raw = cms.group(1)
+            canonical_node_ids = [x.strip() for x in re.split(r"[|,]", raw) if x.strip()]
+
+        pm = _RE_PATH.search(block)
+        if pm:
+            path = pm.group(1).strip()
+            path_node_id = _node_id_from_path(path)
+            if path_node_id and not canonical_node_id and not canonical_node_ids:
+                canonical_node_id = path_node_id
+
+        item = {"type": "knowledge_graph", "id": node_id, "score": score}
+        if path:
+            item["path"] = path
+        if canonical_node_id:
+            item["canonical_node_id"] = canonical_node_id
+        if canonical_node_ids:
+            item["canonical_node_ids"] = canonical_node_ids
+
+        sources.append(item)
+
+    return sources
 
 
 def extract_web_sources(context: str) -> list[dict]:

@@ -36,6 +36,7 @@ class Settings:
     INTERNAL_SECRET: str = os.getenv("INTERNAL_SECRET")
     FASTAPI_URI: str = os.getenv("FASTAPI_URI", "127.0.0.1")
     FASTAPI_PORT: int = int(os.getenv("FASTAPI_PORT", "8001"))
+    ENABLE_EVAL_BOOT: bool = os.getenv("ENABLE_EVAL_BOOT", "true").lower() == "true"
 
     # LangSmith Tracing
     LANGCHAIN_TRACING_V2: str = os.getenv("LANGCHAIN_TRACING_V2", "false")

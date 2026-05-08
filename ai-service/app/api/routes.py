@@ -441,7 +441,7 @@ async def clear_conversation_checkpoint(conversation_id: str, request: Request):
 # ---------------------------------------------------------------------------
 
 class RunBatchRequest(BaseModel):
-    dataset: str = "nd_168_case.json"
+    dataset: str = "qa_test.with_nodes.json"
     source_doc: Optional[str] = None   # Chỉ chấm câu thuộc 1 tài liệu nguồn cụ thể
     concurrency: int = 1               # Default 1 — an toàn nhất cho eval (tránh cache race)
     limit: Optional[int] = None        # None = chạy hết; N = chạy tối đa N câu

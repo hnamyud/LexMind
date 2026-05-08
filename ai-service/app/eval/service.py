@@ -139,7 +139,7 @@ class EvalService:
 
     async def run_batch(
         self,
-        dataset_filename: str = "nd_168_case.json",
+        dataset_filename: str = "qa_test.with_nodes.json",
         concurrency: int = 1,
         limit: Optional[int] = None,
         random_sample: bool = True,
@@ -384,7 +384,8 @@ class EvalService:
                         """
                         INSERT INTO eval_runs (
                             id, session_id, question_id, question,
-                            ground_truth, reference_nodes, retrieved_nodes,
+                            ground_truth, expected_citations,
+                            reference_nodes, retrieved_nodes,
                             ai_answer, context_text,
                             question_type, expected_behavior,
                             score_correctness, score_groundedness,
@@ -392,7 +393,8 @@ class EvalService:
                             retrieval_hit_rate, scored_at
                         ) VALUES (
                             %s, %s, %s, %s,
-                            %s, %s, %s,
+                            %s, %s,
+                            %s, %s,
                             %s, %s,
                             %s, %s,
                             %s, %s,
@@ -407,6 +409,9 @@ class EvalService:
                             rec.get("question_id", ""),
                             rec.get("question", ""),
                             rec.get("ground_truth", ""),
+                            json.dumps(
+                                rec.get("expected_citations", []), ensure_ascii=False
+                            ),
                             json.dumps(
                                 rec.get("reference_nodes", []), ensure_ascii=False
                             ),
@@ -588,6 +593,7 @@ class EvalService:
                     """
                     SELECT
                         r.id, r.question_id, r.question, r.ground_truth,
+                        r.expected_citations,
                         r.reference_nodes, r.retrieved_nodes, r.ai_answer,
                         r.context_text, r.difficulty, r.question_type,
                         r.expected_behavior, r.tags, r.created_at,
@@ -612,7 +618,7 @@ class EvalService:
                     run[dt_field] = run[dt_field].isoformat()
 
             # JSONB có thể là str hoặc dict/list tùy driver
-            for json_field in ("reference_nodes", "retrieved_nodes", "tags"):
+            for json_field in ("expected_citations", "reference_nodes", "retrieved_nodes", "tags"):
                 val = run.get(json_field)
                 if isinstance(val, str):
                     try:

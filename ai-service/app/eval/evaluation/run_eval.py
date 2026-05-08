@@ -125,10 +125,15 @@ def _load_local_dataset(
             "question_type": item.get("question_type", ""),
             "expected_behavior": item.get("expected_behavior", ""),
             "source_docs": item.get("source_docs", []),
+            # Duplicate eval references in inputs as a guard against LangSmith
+            # SDK variants that do not pass all reference_outputs to custom evaluators.
+            "reference_nodes": item.get("reference_nodes", []),
+            "expected_citations": item.get("expected_citations", []),
         }
         reference_outputs = {
             "ground_truth": item.get("ground_truth", ""),
             "reference_nodes": item.get("reference_nodes", []),
+            "expected_citations": item.get("expected_citations", []),  # NEW
             "source_docs": item.get("source_docs", []),
         }
         formatted_data.append({"inputs": inputs, "reference_outputs": reference_outputs})
@@ -220,7 +225,7 @@ def _create_langsmith_dataset_from_local(
 
 
 def run_evaluation(
-    dataset_name: str = "nd_168_case.json",
+    dataset_name: str = "qa_test.with_nodes.json",
     experiment_prefix: str = "lexmind-eval",
     version: str = "v1.0",
     max_examples: int | None = None,
@@ -366,11 +371,12 @@ def _extract_run_records(df, data_source: list[dict]) -> list[dict]:
         qid = inp.get("id", "")
         ref = s.get("reference_outputs") or {}
         sample_by_id[qid] = {
-            "question":          inp.get("question", ""),
-            "question_type":     inp.get("question_type", ""),
-            "expected_behavior": inp.get("expected_behavior", ""),
-            "ground_truth":      ref.get("ground_truth", ""),
-            "reference_nodes":   ref.get("reference_nodes", []),
+            "question":           inp.get("question", ""),
+            "question_type":      inp.get("question_type", ""),
+            "expected_behavior":  inp.get("expected_behavior", ""),
+            "ground_truth":       ref.get("ground_truth", ""),
+            "reference_nodes":    ref.get("reference_nodes", []),
+            "expected_citations": ref.get("expected_citations", []),  # NEW
         }
 
     records = []
@@ -404,24 +410,29 @@ def _extract_run_records(df, data_source: list[dict]) -> list[dict]:
 
         expected_beh = sample.get("expected_behavior", _col(row, "inputs.expected_behavior") or "")
 
+        expected_citations = sample.get("expected_citations", [])
+        if not isinstance(expected_citations, list):
+            expected_citations = []
+
         records.append({
-            "question_id":        qid,
-            "question":           question,
-            "ground_truth":       ground_truth,
-            "reference_nodes":    ref_nodes,
-            "retrieved_nodes":    retrieved_nodes,
-            "ai_answer":          answer,
-            "context_text":       context,
-            "question_type":      sample.get("question_type",     _col(row, "inputs.question_type")     or ""),
-            "expected_behavior":  expected_beh,
+            "question_id":         qid,
+            "question":            question,
+            "ground_truth":        ground_truth,
+            "reference_nodes":     ref_nodes,
+            "expected_citations":  expected_citations,   # NEW
+            "retrieved_nodes":     retrieved_nodes,
+            "ai_answer":           answer,
+            "context_text":        context,
+            "question_type":       sample.get("question_type",    _col(row, "inputs.question_type")    or ""),
+            "expected_behavior":   expected_beh,
             # Mapping 1:1 với schema DB mới
             # None = evaluator bị skip do expected_behavior không phù hợp
             # (DB nên lưu NULL thay vì FALSE để phân biệt skip vs. fail)
-            "score_correctness":  score_correctness,   # BOOLEAN | NULL
-            "score_groundedness": score_groundedness,  # BOOLEAN | NULL
-            "score_behavior":     score_behavior,       # BOOLEAN (luôn có)
-            "score_citation":     score_citation,       # BOOLEAN | NULL
-            "retrieval_hit_rate": retrieval_hit_rate,   # FLOAT 0.0–1.0 | NULL
+            "score_correctness":   score_correctness,   # BOOLEAN | NULL
+            "score_groundedness":  score_groundedness,  # BOOLEAN | NULL
+            "score_behavior":      score_behavior,      # BOOLEAN (luôn có)
+            "score_citation":      score_citation,      # BOOLEAN | NULL
+            "retrieval_hit_rate":  retrieval_hit_rate,  # FLOAT 0.0–1.0 | NULL
         })
 
     return records

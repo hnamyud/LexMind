@@ -1,15 +1,16 @@
 import os
+import re
 
 from typing_extensions import Annotated, TypedDict
 from langchain_openai import ChatOpenAI
 
 
 grader_llm = ChatOpenAI(
-    model=os.getenv("LLM_DIRECT"),
+    model=os.getenv("LLM_ROUTER"),
     api_key=os.getenv("LOCAL_API_KEY"),
     base_url=os.getenv("BASE_URL"),
     temperature=0,
-    
+
     extra_body={
         "thinking": {"type": "disabled"}
     },
@@ -30,21 +31,64 @@ def _skip_result(key: str, reason: str) -> dict:
     """Tạo kết quả skip hợp lệ cho LangSmith."""
     return {"key": key, "score": None, "comment": reason}
 
+
+def _node_id_from_citation(citation: str) -> str | None:
+    text = (citation or "").strip()
+    if not text:
+        return None
+    low = text.lower()
+    if "nghị định 168" in low or "nghi dinh 168" in low:
+        doc_ref = "nd168_2024"
+    elif "luật trật tự" in low or "luat trat tu" in low:
+        doc_ref = "l36_2024"
+    elif "luật đường bộ" in low or "luat duong bo" in low:
+        doc_ref = "l35_2024"
+    else:
+        doc_ref = None
+
+    article_m = re.search(r"[Đđ]iều\s*(\d+)", text)
+    clause_m = re.search(r"[Kk]hoản\s*(\d+)", text)
+    point_m = re.search(r"[Đđ]iểm\s*([a-zđ])", text)
+    if not doc_ref or not article_m:
+        return None
+
+    node_id = f"{doc_ref}_d{article_m.group(1)}"
+    if clause_m:
+        node_id += f"_k{clause_m.group(1)}"
+    if point_m:
+        node_id += f"_{point_m.group(1).lower()}"
+    return node_id
+
+
+def _reference_nodes_from_citations(citations: list[str]) -> list[str]:
+    seen: set[str] = set()
+    nodes: list[str] = []
+    for citation in citations or []:
+        node_id = _node_id_from_citation(str(citation))
+        if node_id and node_id not in seen:
+            seen.add(node_id)
+            nodes.append(node_id)
+    return nodes
+
 # ── Evaluator 1: Correctness ──────────────────────────────────────────────
 class CorrectnessGrade(TypedDict):
     explanation: Annotated[str, ..., "Giải thích từng bước lý do chấm điểm"]
-    correct: Annotated[bool, ..., "True nếu câu trả lời đúng về mức phạt và điều khoản"]
+    score: Annotated[float, ..., "Điểm số: 0.0 | 0.25 | 0.5 | 0.75 | 1.0"]
 
-CORRECTNESS_PROMPT = """Bạn là chuyên gia pháp lý chấm điểm câu trả lời về Nghị định 168/2024/NĐ-CP.
+CORRECTNESS_PROMPT = """Bạn là chuyên gia pháp lý chấm điểm câu trả lời về luật giao thông Việt Nam.
+Phạm vi: Nghị định 168/2024/NĐ-CP, Luật Trật tự ATGT đường bộ 2024 (Luật 36/2024), Luật Đường bộ 2024 (Luật 35/2024).
 
-Tiêu chí chấm (theo thứ tự ưu tiên):
-(1) Mức phạt tiền phải đúng khoảng min-max — sai 1 triệu là sai.
-(2) Phân biệt đúng loại phương tiện nếu câu hỏi hỏi cụ thể (xe máy ≠ ô tô).
-(3) Hình phạt bổ sung (tước GPLX, trừ điểm, tạm giữ xe) phải đúng nếu được đề cập.
-(4) Cho phép thêm thông tin bổ sung miễn là không mâu thuẫn với ground truth.
-(5) KHÔNG yêu cầu cite điều khoản chính xác — chỉ chấm nội dung pháp lý.
+Chấm theo thang 5 mức:
+1.00 — Hoàn toàn đúng: mức phạt đúng min-max, đúng loại xe, hình phạt bổ sung đúng (nếu được hỏi).
+0.75 — Đúng chính, sai phụ: mức phạt chính đúng nhưng thiếu/sai hình phạt bổ sung (tước bằng, trừ điểm).
+0.50 — Đúng một phần: đúng khung phạt chung nhưng sai chi tiết (sai 1 con số, nhầm loại xe không đáng kể).
+0.25 — Sai nhiều: đề cập đúng chủ đề nhưng sai phần lớn thông tin quan trọng (sai mức phạt chính).
+0.00 — Hoàn toàn sai hoặc không trả lời: thông tin trái ngược ground truth hoặc bot từ chối.
 
-Correct = True chỉ khi đáp ứng đủ tiêu chí (1) và (2). (3) là optional.
+Lưu ý:
+- KHÔNG yêu cầu cite điều khoản chính xác — chỉ chấm nội dung pháp lý.
+- Với câu hỏi quy định/định nghĩa: đúng ý chính = 1.0, đúng một phần = 0.5.
+- Trả về score là một trong: 0.0, 0.25, 0.5, 0.75, 1.0
 
 Trả lời đúng schema json của evaluator."""
 
@@ -90,8 +134,11 @@ STUDENT ANSWER: {student_answer}"""
         {"role": "user",   "content": prompt},
     ])
     if not isinstance(grade, dict):
-        return False
-    return grade.get("correct", False)
+        return 0.0
+    raw = grade.get("score", 0.0)
+    # Snap về mức gần nhất trong [0, 0.25, 0.5, 0.75, 1.0]
+    levels = [0.0, 0.25, 0.5, 0.75, 1.0]
+    return min(levels, key=lambda x: abs(x - float(raw)))
 
 
 # ── Evaluator 2: Behavior Compliance ────────────────────────────────────
@@ -158,17 +205,28 @@ AI ANSWER: {student_answer}"""
 # ── Evaluator 3: Groundedness ─────────────────────────────────────────────
 class GroundednessGrade(TypedDict):
     explanation: Annotated[str, ..., "Giải thích từng bước"]
-    grounded: Annotated[bool, ..., "True nếu không hallucinate mức phạt hoặc điều khoản"]
+    score: Annotated[float, ..., "Điểm số: 0.0 | 0.25 | 0.5 | 0.75 | 1.0"]
 
-GROUNDEDNESS_PROMPT = """Bạn là chuyên gia pháp lý kiểm tra hallucination trong câu trả lời về NĐ 168.
+GROUNDEDNESS_PROMPT = """Bạn là chuyên gia pháp lý kiểm tra hallucination trong câu trả lời về luật giao thông Việt Nam.
+Phạm vi: Nghị định 168/2024/NĐ-CP, Luật Trật tự ATGT đường bộ 2024 (Luật 36/2024), Luật Đường bộ 2024 (Luật 35/2024).
 
-Kiểm tra theo thứ tự:
-(1) Mọi mức phạt tiền (số tiền cụ thể) phải có trong FACTS — không được tự nghĩ ra.
-(2) Mọi điều khoản được cite (Điều X, Khoản Y) phải xuất hiện trong FACTS.
-(3) Hình phạt bổ sung phải có căn cứ trong FACTS.
-(4) Cho phép diễn giải và tổng hợp từ FACTS miễn là không thêm thông tin pháp lý mới.
+FACTS được cung cấp:
+  [node_id | Vị trí điều/khoản | Tên văn bản]
+  Nội dung: <nội dung điều khoản gốc>
+  → Hậu quả/Mức phạt: <mức phạt tiền, tước GPLX, ...>
+  → Áp dụng cho: <loại phương tiện/đối tượng>
 
-Grounded = False nếu phát hiện bất kỳ số tiền hoặc điều khoản nào không có trong FACTS.
+Chấm theo thang 5 mức:
+1.00 — Hoàn toàn có căn cứ: mọi số tiền, điều khoản đều có trong FACTS.
+0.75 — Phần lớn có căn cứ: thông tin chính đúng, có 1 chi tiết nhỏ không xác minh được (không mâu thuẫn).
+0.50 — Một phần có căn cứ: thông tin cốt lõi đúng nhưng có thêm thông tin không rõ nguồn gốc (không sai rõ ràng).
+0.25 — Ít có căn cứ: phần lớn thông tin không xác minh được hoặc có 1 điểm hallucinate nhỏ.
+0.00 — Hallucinate: bịa số tiền phạt, bịa điều khoản, hoặc mâu thuẫn rõ ràng với FACTS.
+
+Lưu ý:
+- Cho phép diễn giải, paraphrase, tổng hợp từ nhiều FACTS miễn là đúng ý.
+- Thêm lời giải thích/tư vấn chung không mâu thuẫn FACTS → không phạt.
+- Trả về score là một trong: 0.0, 0.25, 0.5, 0.75, 1.0
 
 Trả lời đúng schema json của evaluator."""
 
@@ -189,6 +247,8 @@ def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) ->
         return _skip_result("groundedness", f"skipped: expected_behavior={expected_behavior}")
 
     grader = grader_llm.with_structured_output(GroundednessGrade, method="json_schema")
+
+    # Ưu tiên groundedness_context (plain text đã reformat) — dễ đọc hơn cho grader
     context = (
         (outputs or {}).get("groundedness_context")
         or (outputs or {}).get("citation_context")
@@ -199,72 +259,88 @@ def groundedness(inputs: dict, outputs: dict, reference_outputs: dict = None) ->
     if not student_answer:
         return False
     if not context:
-        # Không có context → không thể kiểm tra groundedness
-        return False
+        return _skip_result("groundedness", "skipped: missing context")
+
     prompt = f"FACTS:\n{context}\n\nSTUDENT ANSWER:\n{student_answer}"
     grade = grader.invoke([
         {"role": "system", "content": GROUNDEDNESS_PROMPT},
         {"role": "user",   "content": prompt},
     ])
     if not isinstance(grade, dict):
-        return False
-    return grade.get("grounded", False)
+        return 0.0
+    raw = grade.get("score", 0.0)
+    levels = [0.0, 0.25, 0.5, 0.75, 1.0]
+    return min(levels, key=lambda x: abs(x - float(raw)))
 
 
 # ── Evaluator 4: Citation Accuracy ───────────────────────────────────────
 class CitationGrade(TypedDict):
     explanation: Annotated[str, ..., "Giải thích từng bước"]
-    citation_accurate: Annotated[bool, ..., "True nếu mọi citation đều đúng hoặc không có citation"]
+    matched: Annotated[int, ..., "Số expected citations được cite đúng"]
+    total: Annotated[int, ..., "Tổng số expected citations"]
 
-CITATION_PROMPT = """Kiểm tra tính chính xác của trích dẫn điều khoản trong câu trả lời về NĐ 168/2024.
+CITATION_PROMPT = """Kiểm tra tính chính xác của trích dẫn điều khoản pháp lý.
 
-Quy tắc:
-(1) Nếu không có citation nào → citation_accurate = True (không bắt buộc cite).
-(2) Citation phải đúng format: [Điều X, Khoản Y, Điểm Z, Nghị định 168/2024/NĐ-CP].
-(3) Điều khoản được cite phải xuất hiện trong CONTEXT (graph node IDs hoặc raw_text).
-(4) Mức phạt gắn với citation phải khớp với nội dung điều khoản đó trong CONTEXT.
+Bạn được cung cấp EXPECTED CITATIONS — danh sách điều khoản lẽ ra phải được trích dẫn.
+Đếm xem STUDENT ANSWER cite đúng bao nhiêu.
 
-Citation = False chỉ khi:
-- Cite điều khoản không tồn tại trong CONTEXT.
-- Cite Điều X nhưng gắn với mức phạt của Điều Y.
+Quy tắc MATCH (format khác nhau nhưng cùng điều khoản = MATCH):
+- "khoản 2 Điều 58" = "Điều 58 khoản 2" → MATCH
+- "Điều 7 điểm c khoản 7" = "Điều 7 khoản 7 điểm c" → MATCH
+- "Nghị định 168" = "NĐ 168/2024" = "Nghị định 168/2024/NĐ-CP" → MATCH
+
+Yêu cầu output:
+- matched: số citations trong EXPECTED CITATIONS mà bot cite đúng (0 đến total)
+- total: tổng số citations trong EXPECTED CITATIONS
+- Chỉ xét citation trong câu trả lời chính.
 
 Trả lời đúng schema json của evaluator."""
 
 def citation_accuracy(inputs: dict, outputs: dict, reference_outputs: dict = None) -> bool | dict:
     """
     Kiểm tra tính chính xác của citation điều khoản trong câu trả lời.
+    Chấm dựa trên expected_citations từ dataset (thay vì so với retrieved context).
 
     Skip rules:
-    - refuse: Bot từ chối → không được phép dẫn luật linh tinh → skip (None).
-              Nếu Bot dẫn luật khi từ chối → đánh lỗi ở behavior_compliance.
-    - clarify: Optional — Bot có thể cite làm tiền đề hỏi lại ("Theo Điều 6...").
-               Vẫn chấm bình thường để phát hiện citation sai dù là câu clarify.
-    - answer:  Chấm bình thường.
+    - refuse: Bot từ chối → skip (None).
+    - answer/clarify: Chấm bình thường.
     """
     expected_behavior = _get_expected_behavior(inputs, reference_outputs or {})
 
-    # Skip với refuse: Bot không được phép dẫn luật khi từ chối
+    # Skip với refuse
     if expected_behavior == "refuse":
         return _skip_result("citation_accuracy", "skipped: expected_behavior=refuse")
 
-    # Với clarify và answer: chấm bình thường
-    grader = grader_llm.with_structured_output(CitationGrade, method="json_schema")
-    context = (
-        (outputs or {}).get("citation_context")
-        or (outputs or {}).get("grading_context")
-        or (outputs or {}).get("context", "")
+    # Lấy expected_citations từ reference_outputs (dataset)
+    expected_citations: list[str] = (
+        (reference_outputs or {}).get("expected_citations")
+        or (inputs or {}).get("expected_citations")
+        or []
     )
+    if not expected_citations:
+        # Không có expected_citations → không thể chấm
+        return _skip_result("citation_accuracy", "skipped: no expected_citations in dataset")
+
+    grader = grader_llm.with_structured_output(CitationGrade, method="json_schema")
     student_answer = (outputs or {}).get("answer", "")
     if not student_answer:
         return False
-    prompt = f"CONTEXT:\n{context}\n\nANSWER:\n{student_answer}"
+
+    citations_text = "\n".join(f"- {c}" for c in expected_citations)
+    prompt = f"EXPECTED CITATIONS:\n{citations_text}\n\nSTUDENT ANSWER:\n{student_answer}"
+
     grade = grader.invoke([
         {"role": "system", "content": CITATION_PROMPT},
         {"role": "user",   "content": prompt},
     ])
     if not isinstance(grade, dict):
-        return False
-    return grade.get("citation_accurate", False)
+        return 0.0
+    matched = int(grade.get("matched", 0))
+    total = int(grade.get("total", 1)) or 1
+    ratio = matched / total
+    # Snap về mức gần nhất trong 5 mức
+    levels = [0.0, 0.25, 0.5, 0.75, 1.0]
+    return min(levels, key=lambda x: abs(x - ratio))
 
 
 # ── Evaluator 5: Retrieval Node Match ────────────────────────────────────
@@ -281,7 +357,7 @@ def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -
     -------
     float | None :
         - None nếu skip (refuse)
-        - 1.0 nếu không có reference_nodes (không đánh giá được)
+        - None nếu không có reference_nodes (không đánh giá được)
         - tỉ lệ hit [0.0, 1.0] = |retrieved ∩ reference| / |reference|
     """
     expected_behavior = _get_expected_behavior(inputs, reference_outputs)
@@ -296,6 +372,13 @@ def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -
         or (inputs or {}).get("reference_nodes")
         or []
     )
+    if not ref_nodes:
+        expected_citations = (
+            (reference_outputs or {}).get("expected_citations")
+            or (inputs or {}).get("expected_citations")
+            or []
+        )
+        ref_nodes = _reference_nodes_from_citations(expected_citations)
     retrieved_nodes: list[str] = (
         (outputs or {}).get("retrieved_nodes_legal")
         or (outputs or {}).get("retrieved_nodes")
@@ -303,8 +386,7 @@ def retrieval_node_match(inputs: dict, outputs: dict, reference_outputs: dict) -
     )
 
     if not ref_nodes:
-        # Dataset không có reference_nodes → skip (trả 1.0 để không kéo thấp tổng)
-        return 1.0
+        return _skip_result("retrieval_node_match", "skipped: missing reference_nodes")
 
     ref_set = set(ref_nodes)
     ret_set = set(retrieved_nodes)

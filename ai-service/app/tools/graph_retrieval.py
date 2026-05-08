@@ -322,11 +322,17 @@ class GraphRetrievalTool(BaseTool):
         node.source_title AS source_title,
         node.source_type  AS source_type,
         node.path         AS path,
-        labels(node)[0]   AS label,
+        node.canonical_node_id AS canonical_node_id,
+        node.canonical_node_ids AS canonical_node_ids,
+        coalesce(node.label, labels(node)[0]) AS label,
         collect(DISTINCT {
             rel_type: type(r),
             related_id: related.id,
-            related_text: related.text
+            related_text: related.text,
+            related_label: coalesce(related.label, labels(related)[0]),
+            related_path: related.path,
+            related_canonical_node_id: related.canonical_node_id,
+            related_canonical_node_ids: related.canonical_node_ids
         }) AS relationships,
         score,
         'keyword' AS source
@@ -352,11 +358,17 @@ class GraphRetrievalTool(BaseTool):
         node.source_title AS source_title,
         node.source_type  AS source_type,
         node.path         AS path,
-        labels(node)[0]   AS label,
+        node.canonical_node_id AS canonical_node_id,
+        node.canonical_node_ids AS canonical_node_ids,
+        coalesce(node.label, labels(node)[0]) AS label,
         collect(DISTINCT {
             rel_type: type(r),
             related_id: related.id,
-            related_text: related.text
+            related_text: related.text,
+            related_label: coalesce(related.label, labels(related)[0]),
+            related_path: related.path,
+            related_canonical_node_id: related.canonical_node_id,
+            related_canonical_node_ids: related.canonical_node_ids
         }) AS relationships,
         score,
         'vector' AS source
@@ -370,18 +382,18 @@ class GraphRetrievalTool(BaseTool):
     // Bước 1: Tìm Action nodes qua Fulltext Index (thay vì CONTAINS)
     CALL db.index.fulltext.queryNodes('legal_fulltext_index', $violation)
     YIELD node, score
-    WHERE 'Action' IN labels(node)
+    WHERE coalesce(node.label, '') = 'Action' OR 'Action' IN labels(node)
     WITH node AS action, score
     ORDER BY score DESC
     LIMIT $top_k
 
     // Bước 2: Traverse relationships từ Action nodes tìm được
-    OPTIONAL MATCH (action)-[:QUY_DINH_TAI]->(article:Article)
-    OPTIONAL MATCH (action)-[:DAN_DEN_HAU_QUA]->(consequence:Consequence)
-    OPTIONAL MATCH (action)-[:DIEU_KIEN_KICH_HOAT]->(condition:Condition)
-    OPTIONAL MATCH (action)-[:AP_DUNG_CHO]->(subject:Subject)
-    OPTIONAL MATCH (action)-[:TRONG_TRUONG_HOP]->(context_cond:Condition)
-    OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article:Article)
+    OPTIONAL MATCH (action)-[:QUY_DINH_TAI]->(article)
+    OPTIONAL MATCH (action)-[:DAN_DEN_HAU_QUA]->(consequence)
+    OPTIONAL MATCH (action)-[:DIEU_KIEN_KICH_HOAT]->(condition)
+    OPTIONAL MATCH (action)-[:AP_DUNG_CHO]->(subject)
+    OPTIONAL MATCH (action)-[:TRONG_TRUONG_HOP]->(context_cond)
+    OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article)
 
     RETURN
         action.id           AS id,
@@ -391,13 +403,15 @@ class GraphRetrievalTool(BaseTool):
         action.source_title AS source_title,
         action.source_type  AS source_type,
         action.path         AS path,
+        action.canonical_node_id AS canonical_node_id,
+        action.canonical_node_ids AS canonical_node_ids,
         'Action'            AS label,
-        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_text: article.text})
-      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_text: consequence.text})
-      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_text: condition.text})
-      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_text: subject.text})
-      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_text: context_cond.text})
-      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_text: ref_article.text})
+        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_text: article.text,      related_label: coalesce(article.label, labels(article)[0]),      related_path: article.path,      related_canonical_node_id: article.canonical_node_id,      related_canonical_node_ids: article.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_text: consequence.text,  related_label: coalesce(consequence.label, labels(consequence)[0]),  related_path: consequence.path,  related_canonical_node_id: consequence.canonical_node_id,  related_canonical_node_ids: consequence.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_text: condition.text,    related_label: coalesce(condition.label, labels(condition)[0]),    related_path: condition.path,    related_canonical_node_id: condition.canonical_node_id,    related_canonical_node_ids: condition.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_text: subject.text,      related_label: coalesce(subject.label, labels(subject)[0]),      related_path: subject.path,      related_canonical_node_id: subject.canonical_node_id,      related_canonical_node_ids: subject.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_text: context_cond.text, related_label: coalesce(context_cond.label, labels(context_cond)[0]), related_path: context_cond.path, related_canonical_node_id: context_cond.canonical_node_id, related_canonical_node_ids: context_cond.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_text: ref_article.text,  related_label: coalesce(ref_article.label, labels(ref_article)[0]),  related_path: ref_article.path,  related_canonical_node_id: ref_article.canonical_node_id,  related_canonical_node_ids: ref_article.canonical_node_ids})
         AS relationships,
         score,
         'graph' AS source
@@ -410,7 +424,7 @@ class GraphRetrievalTool(BaseTool):
     // Bước 1: Tìm Subject nodes qua Fulltext Index
     CALL db.index.fulltext.queryNodes('legal_fulltext_index', $vehicle_type)
     YIELD node AS subj, score AS subj_score
-    WHERE 'Subject' IN labels(subj)
+    WHERE coalesce(subj.label, '') = 'Subject' OR 'Subject' IN labels(subj)
     WITH subj, subj_score
     ORDER BY subj_score DESC
     LIMIT 3
@@ -441,11 +455,17 @@ class GraphRetrievalTool(BaseTool):
         node.source_title AS source_title,
         node.source_type  AS source_type,
         node.path         AS path,
-        labels(node)[0]   AS label,
+        node.canonical_node_id AS canonical_node_id,
+        node.canonical_node_ids AS canonical_node_ids,
+        coalesce(node.label, labels(node)[0]) AS label,
         collect(DISTINCT {
             rel_type: type(r),
             related_id: related.id,
-            related_text: related.text
+            related_text: related.text,
+            related_label: coalesce(related.label, labels(related)[0]),
+            related_path: related.path,
+            related_canonical_node_id: related.canonical_node_id,
+            related_canonical_node_ids: related.canonical_node_ids
         }) AS relationships,
         violation_score AS score,
         'graph_subject' AS source
@@ -459,20 +479,20 @@ class GraphRetrievalTool(BaseTool):
     // Step 1: Search Consequence nodes via Fulltext Index
     CALL db.index.fulltext.queryNodes('legal_fulltext_index', $consequence_keyword)
     YIELD node, score
-    WHERE 'Consequence' IN labels(node)
+    WHERE coalesce(node.label, '') = 'Consequence' OR 'Consequence' IN labels(node)
     WITH node AS consequence, score
     ORDER BY score DESC
     LIMIT $top_k
 
     // Step 2: Find Action nodes that point TO this Consequence (backward traversal)
-    MATCH (action:Action)-[:DAN_DEN_HAU_QUA]->(consequence)
+    MATCH (action)-[:DAN_DEN_HAU_QUA]->(consequence)
 
     // Step 3: Gather full context from Action node
-    OPTIONAL MATCH (action)-[:QUY_DINH_TAI]->(article:Article)
-    OPTIONAL MATCH (action)-[:DIEU_KIEN_KICH_HOAT]->(condition:Condition)
-    OPTIONAL MATCH (action)-[:AP_DUNG_CHO]->(subject:Subject)
-    OPTIONAL MATCH (action)-[:TRONG_TRUONG_HOP]->(context_cond:Condition)
-    OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article:Article)
+    OPTIONAL MATCH (action)-[:QUY_DINH_TAI]->(article)
+    OPTIONAL MATCH (action)-[:DIEU_KIEN_KICH_HOAT]->(condition)
+    OPTIONAL MATCH (action)-[:AP_DUNG_CHO]->(subject)
+    OPTIONAL MATCH (action)-[:TRONG_TRUONG_HOP]->(context_cond)
+    OPTIONAL MATCH (article)-[:THAM_CHIEU_DEN]->(ref_article)
 
     RETURN
         action.id           AS id,
@@ -482,13 +502,15 @@ class GraphRetrievalTool(BaseTool):
         action.source_title AS source_title,
         action.source_type  AS source_type,
         action.path         AS path,
+        action.canonical_node_id AS canonical_node_id,
+        action.canonical_node_ids AS canonical_node_ids,
         'Action'            AS label,
-        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_text: article.text})
-      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_text: consequence.text})
-      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_text: condition.text})
-      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_text: subject.text})
-      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_text: context_cond.text})
-      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_text: ref_article.text})
+        collect(DISTINCT {rel_type: 'QUY_DINH_TAI',       related_id: article.id,      related_text: article.text,      related_label: coalesce(article.label, labels(article)[0]),      related_path: article.path,      related_canonical_node_id: article.canonical_node_id,      related_canonical_node_ids: article.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'DAN_DEN_HAU_QUA',    related_id: consequence.id,  related_text: consequence.text,  related_label: coalesce(consequence.label, labels(consequence)[0]),  related_path: consequence.path,  related_canonical_node_id: consequence.canonical_node_id,  related_canonical_node_ids: consequence.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'DIEU_KIEN_KICH_HOAT',related_id: condition.id,    related_text: condition.text,    related_label: coalesce(condition.label, labels(condition)[0]),    related_path: condition.path,    related_canonical_node_id: condition.canonical_node_id,    related_canonical_node_ids: condition.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'AP_DUNG_CHO',        related_id: subject.id,      related_text: subject.text,      related_label: coalesce(subject.label, labels(subject)[0]),      related_path: subject.path,      related_canonical_node_id: subject.canonical_node_id,      related_canonical_node_ids: subject.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'TRONG_TRUONG_HOP',   related_id: context_cond.id, related_text: context_cond.text, related_label: coalesce(context_cond.label, labels(context_cond)[0]), related_path: context_cond.path, related_canonical_node_id: context_cond.canonical_node_id, related_canonical_node_ids: context_cond.canonical_node_ids})
+      + collect(DISTINCT {rel_type: 'THAM_CHIEU_DEN',     related_id: ref_article.id,  related_text: ref_article.text,  related_label: coalesce(ref_article.label, labels(ref_article)[0]),  related_path: ref_article.path,  related_canonical_node_id: ref_article.canonical_node_id,  related_canonical_node_ids: ref_article.canonical_node_ids})
         AS relationships,
         score,
         'consequence_first' AS source
@@ -502,7 +524,10 @@ class GraphRetrievalTool(BaseTool):
     _CYPHER_PROVISION_FULLTEXT = """
     CALL db.index.fulltext.queryNodes('legal_fulltext_index', $keyword)
     YIELD node, score
-    WHERE 'Article' IN labels(node) OR 'Definition' IN labels(node) OR 'Chapter' IN labels(node)
+    WHERE coalesce(node.label, '') IN ['Article', 'Definition', 'Chapter']
+       OR 'Article' IN labels(node)
+       OR 'Definition' IN labels(node)
+       OR 'Chapter' IN labels(node)
     WITH node, score
     ORDER BY score DESC
     LIMIT $top_k
@@ -516,11 +541,17 @@ class GraphRetrievalTool(BaseTool):
         node.source_title AS source_title,
         node.source_type  AS source_type,
         node.path         AS path,
-        labels(node)[0]   AS label,
+        node.canonical_node_id AS canonical_node_id,
+        node.canonical_node_ids AS canonical_node_ids,
+        coalesce(node.label, labels(node)[0]) AS label,
         collect(DISTINCT {
             rel_type: type(r), 
             related_id: related.id, 
-            related_text: related.text
+            related_text: related.text,
+            related_label: coalesce(related.label, labels(related)[0]),
+            related_path: related.path,
+            related_canonical_node_id: related.canonical_node_id,
+            related_canonical_node_ids: related.canonical_node_ids
         }) AS relationships,
         score,
         'provision' AS source
@@ -540,10 +571,17 @@ class GraphRetrievalTool(BaseTool):
         n.source_title AS source_title,
         n.source_type  AS source_type,
         n.path         AS path,
-        labels(n)[0]   AS label,
+        n.canonical_node_id AS canonical_node_id,
+        n.canonical_node_ids AS canonical_node_ids,
+        coalesce(n.label, labels(n)[0]) AS label,
         collect(DISTINCT {
             rel_type: type(r), 
-            related_id: related.id
+            related_id: related.id,
+            related_text: related.text,
+            related_label: coalesce(related.label, labels(related)[0]),
+            related_path: related.path,
+            related_canonical_node_id: related.canonical_node_id,
+            related_canonical_node_ids: related.canonical_node_ids
         }) AS relationships,
         1.0 AS score,
         'exact' AS source
@@ -627,7 +665,7 @@ class GraphRetrievalTool(BaseTool):
 
         create_index_cypher = """
         CREATE FULLTEXT INDEX legal_fulltext_index IF NOT EXISTS
-        FOR (n:Article|Action|Consequence|Condition|Subject|Definition|Chapter)
+        FOR (n:Entity)
         ON EACH [n.text, n.raw_text]
         OPTIONS {
             indexConfig: {
@@ -1007,6 +1045,7 @@ class GraphRetrievalTool(BaseTool):
                         "keyword": keyword_results,
                         "vector": vector_results,
                         "graph": graph_results,
+                        "consequence_first": consequence_results,
                     }[source_name]
 
                     for r in source_records:
@@ -1160,6 +1199,8 @@ class GraphRetrievalTool(BaseTool):
             doc_ref = r.get("doc_ref")
             source_title = r.get("source_title")
             path = r.get("path")
+            canonical_node_id = r.get("canonical_node_id")
+            canonical_node_ids = r.get("canonical_node_ids")
 
             if doc_ref:
                 lines.append(f"  <doc_ref>{_xe(doc_ref)}</doc_ref>")
@@ -1167,6 +1208,15 @@ class GraphRetrievalTool(BaseTool):
                 lines.append(f"  <source_title>{_xe(source_title)}</source_title>")
             if path:
                 lines.append(f"  <path>{_xe(path)}</path>")
+            if canonical_node_id:
+                lines.append(f"  <canonical_node_id>{_xe(str(canonical_node_id))}</canonical_node_id>")
+            if canonical_node_ids:
+                if isinstance(canonical_node_ids, list):
+                    canonical_ids_text = ",".join(str(x) for x in canonical_node_ids if x)
+                else:
+                    canonical_ids_text = str(canonical_node_ids)
+                if canonical_ids_text:
+                    lines.append(f"  <canonical_node_ids>{_xe(canonical_ids_text)}</canonical_node_ids>")
 
             # Nội dung chính
             raw_content = r.get("raw_content") or r.get("text") or ""
@@ -1185,10 +1235,31 @@ class GraphRetrievalTool(BaseTool):
                     rel_type = rel.get("rel_type", "UNKNOWN")
                     rel_id = rel.get("related_id", "")
                     rel_text = rel.get("related_text", "") or ""
+                    rel_label = rel.get("related_label", "") or ""
+                    rel_path = rel.get("related_path", "") or ""
+                    rel_canonical_id = rel.get("related_canonical_node_id", "") or ""
+                    rel_canonical_ids = rel.get("related_canonical_node_ids", "") or ""
                     if len(rel_text) > 500:
                         rel_text = rel_text[:500] + "..."
+                    rel_attrs = [
+                        f'type="{_xe(rel_type)}"',
+                        f'id="{_xe(rel_id)}"',
+                    ]
+                    if rel_label:
+                        rel_attrs.append(f'label="{_xe(str(rel_label))}"')
+                    if rel_path:
+                        rel_attrs.append(f'path="{_xe(str(rel_path))}"')
+                    if rel_canonical_id:
+                        rel_attrs.append(f'canonical_node_id="{_xe(str(rel_canonical_id))}"')
+                    if rel_canonical_ids:
+                        if isinstance(rel_canonical_ids, list):
+                            rel_canonical_ids_text = ",".join(str(x) for x in rel_canonical_ids if x)
+                        else:
+                            rel_canonical_ids_text = str(rel_canonical_ids)
+                        if rel_canonical_ids_text:
+                            rel_attrs.append(f'canonical_node_ids="{_xe(rel_canonical_ids_text)}"')
                     lines.append(
-                        f'    <rel type="{_xe(rel_type)}" id="{_xe(rel_id)}">'
+                        f'    <rel {" ".join(rel_attrs)}>'
                         f"{_xe(rel_text)}</rel>"
                     )
                 lines.append("  </relationships>")
@@ -1196,7 +1267,7 @@ class GraphRetrievalTool(BaseTool):
             lines.append("</source>")
             context_blocks.append("\n".join(lines))
 
-        return "\n\n".join(reversed(context_blocks))
+        return "\n\n".join(context_blocks)
 
     # ------------------------------------------------------------------
     # LangChain interface — sync (bắt buộc override)

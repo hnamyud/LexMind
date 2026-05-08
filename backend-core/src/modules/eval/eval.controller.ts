@@ -2,9 +2,6 @@ import { Controller, Post, Get, Body, Param, Query } from '@nestjs/common';
 import { EvalService } from './eval.service';
 import { RunBatchDto } from './dto/run-batch.dto';
 
-// Optional: bạn có thể gắn Guard ở mức Controller này nếu muốn giới hạn quyền chỉ admin
-// @UseGuards(JwtAuthGuard, RolesGuard)
-// @Roles(Role.ADMIN) 
 @Controller('eval')
 export class EvalController {
   constructor(private readonly evalService: EvalService) {}

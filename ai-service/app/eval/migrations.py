@@ -40,14 +40,20 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     tags              JSONB DEFAULT '[]'::jsonb,
     created_at        TIMESTAMPTZ DEFAULT NOW(),
 
+    -- AI evaluation scores (từ LangSmith evaluators)
+    score_correctness  BOOLEAN,       -- đúng nội dung pháp lý so với ground_truth
+    score_groundedness BOOLEAN,       -- không hallucinate so với retrieved context
+    score_behavior     SMALLINT,      -- hành vi đúng expected_behavior
+    score_citation     BOOLEAN,       -- cite đúng expected_citations
+    retrieval_hit_rate FLOAT,         -- tỉ lệ hit node [0.0-1.0]
+    scored_at          TIMESTAMPTZ,
+
     -- Manual scoring (detailed)
     score_retrieval   SMALLINT,      -- 0 = miss, 1 = partial, 2 = hit
     score_context     SMALLINT,      -- 0 = sai/nhiễu, 1 = có nhưng thiếu, 2 = đủ và chính xác
     score_answer      SMALLINT,      -- 0 = sai, 1 = partially correct, 2 = đúng hoàn toàn
-    score_behavior    SMALLINT,      -- 0 = sai expected_behavior, 2 = đúng
     issues            JSONB DEFAULT '[]'::jsonb, -- ["wrong_amount", "hallucination", ...]
     note              TEXT,
-    scored_at         TIMESTAMPTZ,
     scored_by         TEXT           -- admin username / label
 );
 """
@@ -85,6 +91,23 @@ async def run_eval_migrations(pool) -> None:
                 pass
             await conn.execute(EVAL_RUNS_DDL)
             await conn.execute(EVAL_RUNS_INDEX_DDL)
+            # Migrate existing tables: thêm các cột mới nếu chưa có
+            _new_cols = [
+                ("eval_runs", "expected_citations", "JSONB DEFAULT '[]'::jsonb"),
+                ("eval_runs", "score_correctness",  "BOOLEAN"),
+                ("eval_runs", "score_groundedness", "BOOLEAN"),
+                ("eval_runs", "score_citation",     "BOOLEAN"),
+                ("eval_runs", "retrieval_hit_rate", "FLOAT"),
+                ("eval_runs", "scored_at",          "TIMESTAMPTZ"),
+                ("eval_runs", "scored_by",          "TEXT"),
+            ]
+            for table, col, col_type in _new_cols:
+                try:
+                    await conn.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {col} {col_type};"
+                    )
+                except Exception:
+                    pass  # Cột đã tồn tại → bỏ qua
         logging.info("✅ [Eval] Migrations hoàn tất (bảng eval_sessions + eval_runs).")
     except Exception as e:
         logging.error(f"❌ [Eval] Migration failed: {e}")

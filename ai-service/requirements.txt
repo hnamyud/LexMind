@@ -17,20 +17,16 @@ click==8.2.1
 coloredlogs==15.0.1
 cryptography==45.0.3
 dataclasses-json==0.6.7
-datasets==3.6.0
 Deprecated==1.2.18
 dill==0.3.8
 distro==1.9.0
 docstring_parser==0.16
 durationpy==0.10
 elastic-transport==8.17.1
-faiss-cpu==1.11.0
 fastapi==0.115.9
 filelock==3.18.0
 filetype==1.2.0
 firecrawl-py==4.18.1
-flask-cors==6.0.0
-Flask==3.1.1
 flatbuffers==25.2.10
 frozenlist==1.6.0
 fsspec==2025.3.0
@@ -74,7 +70,6 @@ jsonpointer==3.0.0
 jsonschema-specifications==2025.4.1
 jsonschema==4.24.0
 kubernetes==32.0.1
-langchain-chroma==0.2.4
 langchain-community==0.3.24
 langchain-core==0.3.83
 langchain-google-genai==2.1.5
@@ -84,8 +79,6 @@ langchain-text-splitters==0.3.8
 langchain==0.3.25
 langgraph-checkpoint-postgres==3.0.4
 langgraph-checkpoint==4.0.0
-langgraph-prebuilt==1.0.8
-langgraph-sdk==0.3.9
 langgraph==1.0.9
 langsmith==0.7.7
 lxml==5.4.0
@@ -141,7 +134,6 @@ pydantic-settings==2.9.1
 pydantic==2.11.5
 pydantic_core==2.33.2
 pyee==13.0.0
-pyjnius==1.6.1
 pyparsing==3.2.3
 PyPDF2==3.0.1
 pypdf==6.7.0
@@ -151,7 +143,6 @@ python-dateutil==2.9.0.post0
 python-docx==1.1.2
 python-dotenv==1.1.0
 pytz==2025.2
-pyvis==0.3.2
 PyYAML==6.0.2
 rank-bm25==0.2.2
 referencing==0.36.2
