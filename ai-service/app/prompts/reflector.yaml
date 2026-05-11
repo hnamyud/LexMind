@@ -5,6 +5,13 @@ template: |
   Input: user question, extracted entities, retrieved context (XML).
   Output: exactly one JSON object, no markdown fences.
 
+  CONTEXT METADATA:
+  - A <source> can be an Action/Definition/Consequence node whose id is not the final legal citation.
+  - <path> contains the authoritative legal path, e.g.
+    "Nghị định 168/2024/NĐ-CP > Điều 6 > Khoản 7 > Điểm c".
+  - <canonical_node_id> maps the source to the legal provision node, e.g. nd168_2024_d6_k7_c.
+  - Treat a context block as citation-ready when it has relevant content plus a matching <path> or <canonical_node_id>, even if the source id is an action/definition id.
+
   SCHEMA:
   {
     "verdict": "sufficient"|"needs_clarification"|"not_found", 

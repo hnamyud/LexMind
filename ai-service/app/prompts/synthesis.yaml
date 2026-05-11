@@ -70,12 +70,31 @@ template: |
       ✓ [Điều 13, Khoản 1, Điểm a, Luật Đường bộ 2024]
       ✓ [Điều 6, Khoản 8, Điểm b, Nghị định 168/2024/NĐ-CP]
 
-   6. NGUỒN DUY NHẤT ĐỂ LẤY SỐ ĐIỀU/KHOẢN:
-      → Chỉ được trích dẫn số Điều/Khoản nếu nó xuất hiện TƯỜNG MINH
-        trong "Nội dung chính" hoặc phần "Quan hệ đồ thị" (như '📋 Quy định tại')
+    6. NGUỒN DUY NHẤT ĐỂ LẤY SỐ ĐIỀU/KHOẢN:
+       → Chỉ được trích dẫn số Điều/Khoản nếu nó xuất hiện TƯỜNG MINH
+        trong <path>, <canonical_node_id>, "Nội dung chính" hoặc phần "Quan hệ đồ thị" (như '📋 Quy định tại')
         của block context được cung cấp (bắt đầu bằng "<source ...").
-      → Kiểm tra: mức phạt và số Điều PHẢI nằm trong CÙNG MỘT block "<source>".
+       → Kiểm tra: mức phạt và số Điều PHẢI nằm trong CÙNG MỘT block "<source>".
         Nếu mức phạt ở source A và số Điều ở source B → KHÔNG được ghép chúng.
+
+      ⚙️ PATH & CANONICAL NODE METADATA (ƯU TIÊN CAO NHẤT):
+      Graph context có thể chứa:
+      - <path>Nghị định 168/2024/NĐ-CP &gt; Điều 6 &gt; Khoản 7 &gt; Điểm c</path>
+      - <canonical_node_id>nd168_2024_d6_k7_c</canonical_node_id>
+      - <canonical_node_ids>...</canonical_node_ids>
+
+      CÁCH DÙNG:
+      1. Ưu tiên dùng <path> để tạo citation vì đây là đường dẫn pháp lý đã chuẩn hóa.
+      2. Nếu source là Action/Definition/Consequence, KHÔNG cite theo id của source đó.
+         Ví dụ KHÔNG cite: nd168_2024_dung_do_sai_quy_dinh_cao_toc.
+      3. Với Action/Definition/Consequence, dùng <canonical_node_id> hoặc <path> để cite điều/khoản/điểm gốc.
+      4. Nếu <path> và source id khác nhau, tin <path>/<canonical_node_id> hơn source id.
+      5. Ví dụ:
+         <source id="nd168_2024_dung_do_sai_quy_dinh_cao_toc" label="Action">
+           <path>Nghị định 168/2024/NĐ-CP &gt; Điều 6 &gt; Khoản 7 &gt; Điểm c</path>
+           <canonical_node_id>nd168_2024_d6_k7_c</canonical_node_id>
+         </source>
+         → Citation đúng: [Điều 6, Khoản 7, Điểm c, Nghị định 168/2024/NĐ-CP]
 
       ⚙️ PARSING CODE-STYLE REFERENCES (BẮT BUỘC):
       Graph database sử dụng format rút gọn trong "📋 Quy định tại":

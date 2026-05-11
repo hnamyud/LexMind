@@ -19,6 +19,7 @@ Hệ thống chatbot AI hỗ trợ tra cứu và tư vấn **Nghị định 168/
 - [Cấu trúc thư mục](#cấu-trúc-thư-mục)
 - [Database Schema](#database-schema)
 - [AI Service — RAG Pipeline](#ai-service--rag-pipeline)
+- [Benchmark](#benchmark)
 - [API Endpoints](#api-endpoints)
 - [Hướng dẫn cài đặt & chạy](#hướng-dẫn-cài-đặt--chạy)
 - [Biến môi trường](#biến-môi-trường)
@@ -235,6 +236,37 @@ Chatbot-law/
 - **Router**: Tự động gán `response_style="legal"` hoặc `"natural"`. Câu hỏi giao tiếp thường ngày sẽ được xử lý nhẹ nhàng hơn qua `synthesis_natural.yaml`.
 - **Survival Rule**: Khi gặp tình huống chưa có quy định rõ ràng, Reflector kích hoạt cơ chế tự vệ — suy luận tìm luật gần nhất hoặc thừa nhận vùng xám thay vì phán đoán sai.
 - **Event-Driven Auto-title**: Sau tin nhắn đầu, NestJS phát sự kiện `conversation.title_needed`. `TitleGeneratorService` chạy nền gọi AI Service để sinh tên phiên và lưu DB một cách trong suốt.
+
+---
+
+## Benchmark
+
+Benchmark được thực hiện trên bộ dataset **80 câu hỏi** , chia thành 8 session, mỗi session 10 câu. Các chỉ số được chấm theo thang điểm `0.0` đến `1.0`, riêng latency tính bằng giây.
+
+### Tổng quan kết quả
+
+| Chỉ số | Điểm |
+|--------|------|
+| Behavior compliance | **0.9500** |
+| Groundedness | **0.9469** |
+| Correctness | **0.7844** |
+| Retrieval node match | **0.6299** |
+| Citation accuracy | **0.5719** |
+| Latency trung bình | **16.04s** |
+
+### Kết quả theo session
+
+| Session | Behavior compliance | Citation accuracy | Correctness | Groundedness | Retrieval node match | Latency (s) |
+|---------|---------------------|-------------------|-------------|--------------|----------------------|-------------|
+| 1 -> 10 | 1.0000 | 0.6500 | 0.8500 | 1.0000 | 0.5750 | 12.06 |
+| 11 -> 20 | 1.0000 | 0.8000 | 0.9000 | 0.9500 | 0.8330 | 14.38 |
+| 21 -> 30 | 1.0000 | 0.6750 | 0.9250 | 0.8750 | 0.6830 | 13.41 |
+| 31 -> 40 | 0.9000 | 0.6000 | 0.6500 | 0.9500 | 0.6000 | 11.73 |
+| 41 -> 50 | 1.0000 | 0.5000 | 0.8250 | 1.0000 | 0.7170 | 23.59 |
+| 51 -> 60 | 0.9000 | 0.4750 | 0.6500 | 1.0000 | 0.6480 | 17.18 |
+| 61 -> 70 | 0.9000 | 0.3750 | 0.7250 | 0.8500 | 0.3930 | 17.20 |
+| 71 -> 80 | 0.9000 | 0.5000 | 0.7500 | 0.9500 | 0.5900 | 18.76 |
+| **Trung bình** | **0.9500** | **0.5719** | **0.7844** | **0.9469** | **0.6299** | **16.04** |
 
 ---
 

@@ -64,6 +64,14 @@ template: |
       [Điều X, Khoản Y, Điểm Z, Nghị định 168/2024/NĐ-CP]
       [Điều X, Khoản Y, Điểm Z, Luật Đường bộ 2024]
       [Điều X, Khoản Y, Điểm Z, Luật Trật tự, An toàn giao thông đường bộ 2024]
+  13. Graph context now contains legal source metadata:
+      - <path> gives the authoritative citation path, e.g.
+        "Nghị định 168/2024/NĐ-CP > Điều 6 > Khoản 7 > Điểm c".
+      - <canonical_node_id> maps an Action/Definition node to the legal provision node, e.g.
+        nd168_2024_d6_k7_c.
+      - If a source has <path> or <canonical_node_id>, use that to form the citation.
+      - Do NOT cite the Action/Definition id itself (e.g. nd168_2024_dung_do_sai_quy_dinh_cao_toc).
+      - If <path> conflicts with source id, trust <path>/<canonical_node_id> for citation.
 
   # RESPONSE FORMAT (concise)
   - Open with 1 short, natural, friendly sentence.
