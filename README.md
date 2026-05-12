@@ -22,6 +22,7 @@ Hệ thống chatbot AI hỗ trợ tra cứu và tư vấn **Nghị định 168/
 - [Benchmark](#benchmark)
 - [API Endpoints](#api-endpoints)
 - [Hướng dẫn cài đặt & chạy](#hướng-dẫn-cài-đặt--chạy)
+- [Chạy bằng Docker](#chạy-bằng-docker)
 - [Biến môi trường](#biến-môi-trường)
 - [Đóng góp](#đóng-góp)
 - [License](#license)
@@ -350,6 +351,166 @@ npm run dev
 Sau khi khởi động:
 - Backend API: `http://localhost:8080/api/v1`
 - AI Service: `http://localhost:8001`
+
+---
+
+## Chạy bằng Docker
+
+Repo có 2 image runtime chính:
+
+| Service | Image tag gợi ý | Port |
+|---------|------------------|------|
+| AI Service | `chatbot-law-ai:optimized` | `8001` |
+| Backend Core | `chatbot-law-backend:optimized` | `8080` |
+
+### Chuẩn bị `.env`
+
+Tạo file `.env` ở root project từ `.env.example`, sau đó cấu hình các biến cloud/local cần thiết:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Các biến quan trọng khi chạy Docker:
+
+```env
+PORT=8080
+FASTAPI_PORT=8001
+
+# Backend gọi AI qua Docker network, không dùng localhost trong container.
+FASTAPI_URL=chatbot-law-ai-test
+
+# Nếu dùng model host local trên máy dev, container phải gọi host.docker.internal.
+BASE_URL=http://host.docker.internal:20128/v1
+
+# Redis Stack trong Docker network.
+REDIS_HOST=chatbot-law-redis-test
+REDIS_PORT=6379
+REDIS_URL=redis://chatbot-law-redis-test:6379
+```
+
+> Lưu ý: Docker `--env-file` không parse dấu quote giống `python-dotenv`. Nếu `.env` đang có dạng `KEY="value"`, nên dùng file env tạm đã bỏ quote như ví dụ bên dưới.
+
+### Build image
+
+Chạy từ root project:
+
+```powershell
+docker build -t chatbot-law-ai:optimized ./ai-service
+docker build -t chatbot-law-backend:optimized ./backend-core
+```
+
+Kích thước tham khảo sau tối ưu:
+
+| Image | Size tham khảo |
+|-------|----------------|
+| `chatbot-law-ai:optimized` | khoảng `2.32GB` |
+| `chatbot-law-backend:optimized` | khoảng `658MB` |
+
+### Run stack test bằng Docker
+
+Tạo Docker network:
+
+```powershell
+docker network create chatbot-law-run
+```
+
+Tạo env file tạm tương thích Docker từ `.env` root:
+
+```powershell
+$tmp = Join-Path $env:TEMP 'chatbot-law-docker.env'
+Get-Content .env | ForEach-Object {
+  if ($_ -match '^\s*$' -or $_ -match '^\s*#' -or $_ -notmatch '=') {
+    $_
+  } else {
+    $parts = $_.Split('=', 2)
+    $key = $parts[0]
+    $value = $parts[1].Trim()
+    if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+      $value = $value.Substring(1, $value.Length - 2)
+    }
+    "$key=$value"
+  }
+} | Set-Content -Encoding ascii $tmp
+```
+
+Chạy Redis Stack, AI Service, Backend Core:
+
+```powershell
+docker run -d `
+  --name chatbot-law-redis-test `
+  --network chatbot-law-run `
+  -p 6379:6379 `
+  redis/redis-stack-server:latest
+
+docker run -d `
+  --name chatbot-law-ai-test `
+  --network chatbot-law-run `
+  --env-file $tmp `
+  -e REDIS_URL=redis://chatbot-law-redis-test:6379 `
+  -e FASTAPI_URI=0.0.0.0 `
+  -p 8001:8001 `
+  chatbot-law-ai:optimized
+
+docker run -d `
+  --name chatbot-law-backend-test `
+  --network chatbot-law-run `
+  --env-file $tmp `
+  -e FASTAPI_URL=chatbot-law-ai-test `
+  -e FASTAPI_PORT=8001 `
+  -e REDIS_HOST=chatbot-law-redis-test `
+  -e REDIS_PORT=6379 `
+  -e REDIS_URL=redis://chatbot-law-redis-test:6379 `
+  -p 8080:8080 `
+  chatbot-law-backend:optimized
+```
+
+Kiểm tra trạng thái:
+
+```powershell
+docker ps --filter "name=chatbot-law-.*-test"
+Invoke-RestMethod http://localhost:8001/health
+```
+
+Kết quả AI health kỳ vọng:
+
+```json
+{
+  "status": "healthy",
+  "neo4j_connected": true,
+  "gemini_configured": true,
+  "embed_model_loaded": true,
+  "cache_connected": true
+}
+```
+
+Endpoints sau khi chạy:
+
+- AI Service: `http://localhost:8001`
+- AI health: `http://localhost:8001/health`
+- Backend API: `http://localhost:8080`
+- Swagger UI: `http://localhost:8080/docs`
+
+### Dừng stack test
+
+```powershell
+docker rm -f chatbot-law-ai-test chatbot-law-backend-test chatbot-law-redis-test
+```
+
+### Chạy bằng Docker Compose
+
+Có thể dùng Compose để build/run nhanh:
+
+```powershell
+docker compose up --build
+```
+
+Nếu cần semantic cache đầy đủ cho pipeline, dùng Redis Stack thay cho Redis thường trong Compose:
+
+```yaml
+redis:
+  image: redis/redis-stack-server:latest
+```
 
 ---
 

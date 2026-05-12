@@ -73,3 +73,5 @@ venv/
 /ai-service/test
 /backend-core/docs
 /task
+.pytest_cache/
+.vscode/

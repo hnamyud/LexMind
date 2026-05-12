@@ -14,7 +14,18 @@ COPY src ./src
 RUN npx prisma generate
 RUN npm run build
 RUN find dist -type f -name "*.map" -delete
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev \
+    && rm -rf \
+        node_modules/prisma \
+        node_modules/@prisma/config \
+        node_modules/@prisma/dev \
+        node_modules/@prisma/studio-core \
+        node_modules/@prisma/fetch-engine \
+        node_modules/@prisma/engines \
+        node_modules/@prisma/get-platform \
+        node_modules/@electric-sql \
+        node_modules/effect \
+        node_modules/typescript
 
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app

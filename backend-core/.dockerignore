@@ -18,6 +18,7 @@ tmp_schema.prisma
 docs-api/
 test/
 *.spec.ts
+system_overview.md
 README.md
 LICENSE
 npm-debug.log*

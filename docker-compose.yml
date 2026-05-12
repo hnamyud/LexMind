@@ -6,6 +6,7 @@ services:
     image: redis:7-alpine
     container_name: chatbot-law-redis
     restart: unless-stopped
+    mem_limit: 256m
     ports:
       - "6380:6379"
     volumes:
@@ -25,6 +26,7 @@ services:
       dockerfile: Dockerfile
     container_name: chatbot-law-ai-service
     restart: unless-stopped
+    mem_limit: 3g
     env_file:
       - ./.env
     environment:
@@ -53,6 +55,7 @@ services:
       dockerfile: Dockerfile
     container_name: chatbot-law-backend-core
     restart: unless-stopped
+    mem_limit: 512m
     env_file:
       - ./.env
     environment:
