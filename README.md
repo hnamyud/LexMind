@@ -404,8 +404,8 @@ Kích thước tham khảo sau tối ưu:
 
 | Image | Size tham khảo |
 |-------|----------------|
-| `chatbot-law-ai:optimized` | khoảng `2.32GB` |
-| `chatbot-law-backend:optimized` | khoảng `658MB` |
+| `chatbot-law-ai:optimized` | khoảng `485MB` |
+| `chatbot-law-backend:optimized` | khoảng `135MB` |
 
 ### Run stack test bằng Docker
 
