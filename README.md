@@ -106,7 +106,7 @@ Luật giao thông Việt Nam thay đổi thường xuyên và có nhiều đi�
 | LLM Orchestration | LangGraph | 1.0.9 |
 | LLM Model | Google Gemini (3.0 Flash, 3.1 Flash Lite) | Latest |
 | Knowledge Graph | Neo4j | 5.28.1 |
-| Embeddings | [DEk21_hcmute_embedding](https://huggingface.co/huyydangg/DEk21_hcmute_embedding) | 4.1.0 |
+| Embeddings | [DEk21_hcmute_embedding](https://huggingface.co/huyydangg/DEk21_hcmute_embedding) qua ONNX Runtime | 1.22.0 |
 | Web Search | Serper.dev + Firecrawl | Via SDK |
 | State Management | LangGraph AsyncPostgresSaver | 4.0.0 |
 | Image Processing | Sharp + Cloudinary | Latest |
@@ -387,6 +387,13 @@ BASE_URL=http://host.docker.internal:20128/v1
 REDIS_HOST=chatbot-law-redis-test
 REDIS_PORT=6379
 REDIS_URL=redis://chatbot-law-redis-test:6379
+
+# Embedding được load bằng ONNX Runtime.
+EMBED_MODEL_ID=huyydangg/DEk21_hcmute_embedding
+EMBED_ONNX_PROVIDERS=CPUExecutionProvider
+EMBED_BATCH_SIZE=32
+EMBED_MAX_LENGTH=
+EMBED_NORMALIZE=false
 ```
 
 > Lưu ý: Docker `--env-file` không parse dấu quote giống `python-dotenv`. Nếu `.env` đang có dạng `KEY="value"`, nên dùng file env tạm đã bỏ quote như ví dụ bên dưới.
@@ -404,7 +411,7 @@ Kích thước tham khảo sau tối ưu:
 
 | Image | Size tham khảo |
 |-------|----------------|
-| `chatbot-law-ai:optimized` | khoảng `485MB` |
+| `chatbot-law-ai:optimized` | khoảng `313MB` |
 | `chatbot-law-backend:optimized` | khoảng `135MB` |
 
 ### Run stack test bằng Docker

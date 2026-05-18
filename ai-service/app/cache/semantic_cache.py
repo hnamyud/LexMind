@@ -97,8 +97,8 @@ class SemanticCacheService:
     ----------
     redis_url : str
         Redis connection URL (cần Redis Stack cho RediSearch).
-    embed_model : SentenceTransformer
-        Model embedding đã load sẵn (dùng chung với graph_retrieval).
+    embed_model : object
+        Model embedding đã load sẵn, có encode() và dùng chung với graph_retrieval.
     ttl : int | None
         Time-to-live cho cache entries (giây). None = không hết hạn.
     """

@@ -227,8 +227,8 @@ class GraphRetrievalTool(BaseTool):
     ----------
     driver : neo4j.AsyncDriver
         Driver Neo4j async đã được khởi tạo sẵn.
-    embed_model : SentenceTransformer
-        Model embedding đã được load sẵn.
+    embed_model : object
+        Model embedding đã được load sẵn, có encode().
     top_k : int
         Số node tìm kiếm tối đa mỗi nhánh (mặc định: 5).
     keyword_timeout : float
@@ -1510,8 +1510,8 @@ def make_graph_retrieval_tool(
     ----------
     driver : neo4j.AsyncDriver
         Driver sau khi đã gọi verify_connectivity().
-    embed_model : SentenceTransformer
-        Model embedding đã được load.
+    embed_model : object
+        Model embedding đã được load, có encode().
     top_k : int
         Số lượng node tìm kiếm tối đa mỗi nhánh.
     score_threshold : float

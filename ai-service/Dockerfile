@@ -4,8 +4,7 @@ FROM python:3.11-slim AS builder
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HF_HOME=/tmp/huggingface
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
@@ -22,7 +21,7 @@ COPY requirements.txt ./requirements.txt
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     PIP_NO_CACHE_DIR=0 pip install --upgrade pip \
-    && PIP_NO_CACHE_DIR=0 pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+    && PIP_NO_CACHE_DIR=0 pip install -r requirements.txt
 
 FROM python:3.11-slim AS runtime
 
@@ -30,7 +29,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    HF_HOME=/tmp/huggingface \
+    HF_HOME=/data/huggingface \
+    EMBED_MODEL_ID=huyydangg/DEk21_hcmute_embedding \
+    EMBED_ONNX_PROVIDERS=CPUExecutionProvider \
     PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
@@ -45,7 +46,8 @@ COPY --from=builder /opt/venv /opt/venv
 COPY app ./app
 COPY main.py ./main.py
 
-RUN chown -R app:app /app
+RUN mkdir -p /data/huggingface \
+    && chown -R app:app /app /data
 USER app
 
 EXPOSE 8001

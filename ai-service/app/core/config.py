@@ -25,7 +25,11 @@ class Settings:
     LLM_REFLECTOR: str = os.getenv("LLM_REFLECTOR", "gemini-3-flash-preview")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
-    EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID")
+    EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID", "huyydangg/DEk21_hcmute_embedding")
+    EMBED_ONNX_PROVIDERS: str = os.getenv("EMBED_ONNX_PROVIDERS", "CPUExecutionProvider")
+    EMBED_BATCH_SIZE: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
+    EMBED_MAX_LENGTH: int | None = int(os.getenv("EMBED_MAX_LENGTH")) if os.getenv("EMBED_MAX_LENGTH") else None
+    EMBED_NORMALIZE: bool = os.getenv("EMBED_NORMALIZE", "false").lower() == "true"
 
     # PostgreSQL dùng cho LangGraph AsyncPostgresSaver
     # Format: postgresql+psycopg://user:password@host:port/dbname

@@ -3,10 +3,10 @@ services:
   # Redis (local) — session cache / queue
   # --------------------------------------------------------------------------
   redis:
-    image: redis:7-alpine
+    image: redis/redis-stack-server:latest
     container_name: chatbot-law-redis
     restart: unless-stopped
-    mem_limit: 256m
+    mem_limit: 512m
     ports:
       - "6380:6379"
     volumes:
@@ -33,7 +33,11 @@ services:
       FASTAPI_URI: 0.0.0.0
       FASTAPI_PORT: 8001
       REDIS_URL: "redis://redis:6379"
+      EMBED_MODEL_ID: ${EMBED_MODEL_ID:-huyydangg/DEk21_hcmute_embedding}
+      EMBED_ONNX_PROVIDERS: ${EMBED_ONNX_PROVIDERS:-CPUExecutionProvider}
       # DATABASE_URL, NEO4J_* → từ .env (cloud)
+    volumes:
+      - hf_cache:/data/huggingface
     ports:
       - "8001:8001"
     healthcheck:
@@ -78,3 +82,4 @@ services:
 
 volumes:
   redis_data:
+  hf_cache:
