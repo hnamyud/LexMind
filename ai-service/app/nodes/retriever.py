@@ -29,6 +29,15 @@ _RE_CONTEXT_SOURCE_HEADER = re.compile(
     re.MULTILINE,
 )
 
+_EXPANDED_BUDGET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bso sánh\b", re.IGNORECASE),
+    re.compile(r"\bquy trình\b", re.IGNORECASE),
+    re.compile(r"\btrình tự\b", re.IGNORECASE),
+    re.compile(r"\bliệt kê\b", re.IGNORECASE),
+    re.compile(r"\btổng mức phạt\b", re.IGNORECASE),
+    re.compile(r"\bđồng thời\b", re.IGNORECASE),
+)
+
 
 # ---------------------------------------------------------------------------
 # Pre-reflector filter
@@ -138,6 +147,34 @@ def _format_multi_violation_context(sub_contexts: list[dict]) -> str:
     return f'<multi_violation total="{total}">\n' f"{inner}\n" f"</multi_violation>"
 
 
+def _should_expand_retrieval_budget(state: dict) -> bool:
+    """Tăng budget cho câu hard hoặc câu có tín hiệu multi-facet."""
+    if state.get("complexity_level", 2) >= 3:
+        return True
+
+    query_text = " ".join(
+        str(part or "")
+        for part in (
+            state.get("legal_query", ""),
+            state.get("messages", [])[-1].content if state.get("messages") else "",
+        )
+    )
+    return any(pattern.search(query_text) for pattern in _EXPANDED_BUDGET_PATTERNS)
+
+
+def _resolve_retrieval_budget(state: dict, *, multi_subquery: bool) -> tuple[int, int]:
+    """
+    Runtime retrieval budget.
+    - Multi-subquery path giữ budget mặc định cho từng sub-query để tránh nổ latency.
+    - Single hard/multi-facet query mở rộng budget.
+    """
+    if multi_subquery:
+        return 5, 10
+    if _should_expand_retrieval_budget(state):
+        return 8, 16
+    return 5, 10
+
+
 # ---------------------------------------------------------------------------
 # Retriever node (Option B — nhận self)
 # ---------------------------------------------------------------------------
@@ -162,6 +199,10 @@ async def _node_retriever(self, state: dict) -> dict:
 
     # Lấy threshold từ service instance (nếu override)
     threshold = getattr(self, "_REFLECTOR_SCORE_THRESHOLD", _REFLECTOR_SCORE_THRESHOLD)
+    retrieval_top_k, max_results = _resolve_retrieval_budget(
+        state,
+        multi_subquery=bool(sub_queries),
+    )
 
     # ── Single-violation path (backward compatible) ───────────────
     if not sub_queries:
@@ -170,10 +211,15 @@ async def _node_retriever(self, state: dict) -> dict:
 
         logging.info(
             f"[STEP2] Single-query retrieval: query='{legal_query[:80]}' | "
-            f"entities={entities}"
+            f"entities={entities} | top_k={retrieval_top_k} | max_results={max_results}"
         )
         try:
-            context = await graph_tool._arun(query=legal_query, entities=entities)
+            context = await graph_tool._arun(
+                query=legal_query,
+                entities=entities,
+                retrieval_top_k=retrieval_top_k,
+                max_results=max_results,
+            )
             context = _filter_context_for_reflector(context, threshold)
             return {"context": context, "sub_contexts": []}
         except Exception as e:
@@ -192,7 +238,12 @@ async def _node_retriever(self, state: dict) -> dict:
         if not q:
             return {"legal_query": q, "context": "", "label": label}
         try:
-            ctx = await graph_tool._arun(query=q, entities=e)
+            ctx = await graph_tool._arun(
+                query=q,
+                entities=e,
+                retrieval_top_k=retrieval_top_k,
+                max_results=max_results,
+            )
             ctx = _filter_context_for_reflector(ctx, threshold)
             return {"legal_query": q, "context": ctx, "label": label}
         except Exception as ex:

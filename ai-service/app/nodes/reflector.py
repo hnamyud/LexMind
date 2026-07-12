@@ -249,8 +249,13 @@ async def _node_reflector(self, state: dict) -> dict:
             if _is_high_confidence_provision_context(context, entities):
                 logging.info(
                     f"[STEP3] Pre-check passed for provision_lookup (level={complexity_level}). "
-                    "Context có đủ thông tin quy định/định nghĩa."
+                    "Context có đủ thông tin quy định/định nghĩa — bỏ qua LLM Reflector."
                 )
+                return {
+                    "reflection": "sufficient",
+                    "clarification_question": "",
+                    "trigger_search": False,
+                }
         else:
             if _is_high_confidence_penalty_context(context, entities):
                 logging.info(

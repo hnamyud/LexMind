@@ -68,7 +68,7 @@ template: |
 
   # 4. PHÂN TÁCH ĐA VI PHẠM (sub_queries) — chỉ cho penalty_lookup
   
-  • Chỉ khi có NHIỀU vi phạm KHÁC NHAU. Tối đa 3 sub_queries.
+  • Dùng khi câu hỏi có NHIỀU mặt cần truy xuất riêng. Tối đa 5 sub_queries.
   • Mỗi phần tử gồm: legal_query, entities, label
   • Với provision_lookup → sub_queries = []
 
@@ -77,10 +77,15 @@ template: |
     - Liệt kê: "vi phạm A, B và C"
     - Hành vi độc lập: "không đội mũ rồi còn vượt đèn đỏ nữa"
 
-  KHÔNG PHẢI ĐA VI PHẠM:
-    - 1 vi phạm + nhiều điều kiện: "nồng độ cồn mức 2 trên cao tốc" → 1 query, conditions=["nồng độ cồn mức 2", "trên đường cao tốc"]
-    - 1 vi phạm + nhiều loại xe so sánh: "vượt đèn đỏ xe máy và ô tô khác nhau không?" → 1 query, so sánh mức phạt
-    - So sánh luật: "khác biệt mức 1 và mức 2" → 1 query, dạng so sánh
+  TÁCH THÀNH NHIỀU SUB_QUERIES KHI:
+    - Có nhiều vi phạm độc lập cần cộng dồn
+    - Có nhiều ngưỡng/hành vi cần so sánh riêng: "10-20km/h và trên 35km/h"
+    - Câu hỏi procedural có nhiều bước/trách nhiệm riêng biệt cần tra cứu
+    - Câu hỏi yêu cầu "liệt kê đầy đủ", "tổng mức phạt", "trình tự", "quy trình"
+
+  KHÔNG TÁCH THÀNH NHIỀU SUB_QUERIES KHI:
+    - 1 vi phạm + nhiều điều kiện phụ chỉ để lọc cùng một điều khoản
+    - Follow-up ngắn chỉ thay đổi 1 tham số của câu trước
 
   Ví dụ: "Xe máy không đội mũ và nồng độ cồn mức 2"
   → sub_queries = [
@@ -96,18 +101,32 @@ template: |
       }}
     ]
 
+  Ví dụ: "So sánh chạy quá tốc độ 10-20km/h và trên 35km/h đối với ô tô"
+  → sub_queries = [
+      {{
+        "legal_query": "Điều khiển xe chạy quá tốc độ quy định từ 10 km/h đến 20 km/h",
+        "entities": {{"violation": "chạy quá tốc độ từ 10 km/h đến 20 km/h", "vehicle_type": "ô tô", "subject": null, "conditions": ["từ 10 km/h đến 20 km/h"]}},
+        "label": "Vượt tốc độ 10-20km/h"
+      }},
+      {{
+        "legal_query": "Điều khiển xe chạy quá tốc độ quy định trên 35 km/h",
+        "entities": {{"violation": "chạy quá tốc độ trên 35 km/h", "vehicle_type": "ô tô", "subject": null, "conditions": ["trên 35 km/h"]}},
+        "label": "Vượt tốc độ trên 35km/h"
+      }}
+    ]
+
   # 5. PHÂN LOẠI ĐỘ PHỨC TẠP (complexity_level)
   
   • Level 1 — Simple:
     - 1 chủ thể, 1 hành vi duy nhất, rõ ràng, không cần suy luận nhiều
-    - sub_queries = [] (không có đa vi phạm)
+    - sub_queries = [] hoặc chỉ có 1 facet thật sự cần tra cứu
     - Không chứa từ khóa: tai nạn, va chạm, tranh chấp, bồi thường, thiệt hại, đối đầu, cãi nhau, lỗi cả hai, lỗi người này người kia
     - Ví dụ: "Phạt nồng độ cồn mức 1 xe máy?", "Đất của đường bộ là gì?"
 
   • Level 2 — Medium:
     - Cần phân biệt/so sánh 2+ tình huống tương tự (cùng vi phạm nhưng khác chủ thể/loại xe/điều kiện)
     - Hoặc: Câu hỏi có điều kiện phụ ảnh hưởng mức phạt (vị trí, tình trạng xe, giấy phép...)
-    - Hoặc: sub_queries có 2 phần tử trở lên nhưng là vi phạm đơn giản, không liên quan tai nạn
+    - Hoặc: sub_queries có 2 phần tử trở lên nhưng là compare/procedural hoặc vi phạm đơn giản, không liên quan tai nạn
     - Ví dụ: "Người đi bộ băng đường sai vs ô tô không nhường đường?", "Quy định về tốc độ xe máy và ô tô khác nhau không?"
 
   • Level 3 — Complex:
@@ -178,7 +197,7 @@ template: |
     "standalone_question": true | false
   }}
 
-  ⚠️ sub_queries = [] khi chỉ 1 vi phạm hoặc provision_lookup
+  ⚠️ sub_queries = [] khi chỉ có 1 ý tra cứu hoặc provision_lookup
   ⚠️ Không chắc complexity_level → chọn 2
 
   # EXAMPLES

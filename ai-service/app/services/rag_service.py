@@ -202,7 +202,7 @@ class RAGService:
         question: str,
         conversation_id: str | None = None,
         enable_web_search: bool = True,
-        enable_cache: bool = False,
+        enable_cache: bool = True,
     ):
         """Streaming pipeline — delegate sang graph/streaming.ask_stream."""
         async for chunk in _ask_stream_fn(

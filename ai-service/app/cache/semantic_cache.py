@@ -29,6 +29,7 @@ Schema Redis (Hash storage):
 """
 
 import asyncio
+import functools
 import json
 import logging
 import math
@@ -145,6 +146,12 @@ class SemanticCacheService:
         # Background cleanup task
         self._cleanup_task: Optional[asyncio.Task] = None
 
+    async def _run_blocking(self, func, *args, **kwargs):
+        """Run sync RedisVL/Redis work outside the event loop."""
+        loop = asyncio.get_running_loop()
+        call = functools.partial(func, *args, **kwargs)
+        return await loop.run_in_executor(None, call)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -152,27 +159,7 @@ class SemanticCacheService:
     async def initialize(self) -> None:
         """Kết nối Redis và tạo/kiểm tra index."""
         try:
-            self._redis_client = Redis.from_url(
-                self._redis_url,
-                decode_responses=False,  # RedisVL cần bytes cho vector
-            )
-            # Test connection
-            self._redis_client.ping()
-
-            schema = IndexSchema.from_dict(_SCHEMA_DICT)
-            self._index = SearchIndex(schema=schema, redis_client=self._redis_client)
-
-            # Tạo index nếu chưa tồn tại, nếu đã tồn tại thì dùng lại
-            try:
-                self._index.create(overwrite=False)
-                logging.info("✅ Redis Semantic Cache index 'legal_cache' đã sẵn sàng.")
-            except ResponseError as e:
-                if "Index already exists" in str(e):
-                    logging.info("✅ Redis Semantic Cache index 'legal_cache' đã tồn tại, dùng lại.")
-                else:
-                    raise
-
-            self._connected = True
+            await self._run_blocking(self._initialize_sync)
 
             # Khởi động background cleanup task
             self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
@@ -189,6 +176,27 @@ class SemanticCacheService:
             )
             self._connected = False
 
+    def _initialize_sync(self) -> None:
+        self._redis_client = Redis.from_url(
+            self._redis_url,
+            decode_responses=False,  # RedisVL cần bytes cho vector
+        )
+        self._redis_client.ping()
+
+        schema = IndexSchema.from_dict(_SCHEMA_DICT)
+        self._index = SearchIndex(schema=schema, redis_client=self._redis_client)
+
+        try:
+            self._index.create(overwrite=False)
+            logging.info("✅ Redis Semantic Cache index 'legal_cache' đã sẵn sàng.")
+        except ResponseError as e:
+            if "Index already exists" in str(e):
+                logging.info("✅ Redis Semantic Cache index 'legal_cache' đã tồn tại, dùng lại.")
+            else:
+                raise
+
+        self._connected = True
+
     async def close(self) -> None:
         """Đóng kết nối Redis và hủy background tasks."""
         # Cancel cleanup task
@@ -202,7 +210,7 @@ class SemanticCacheService:
 
         if self._redis_client:
             try:
-                self._redis_client.close()
+                await self._run_blocking(self._redis_client.close)
                 logging.info("✅ Đã đóng kết nối Redis Semantic Cache.")
             except Exception as e:
                 logging.warning(f"⚠️ Lỗi khi đóng Redis: {e}")
@@ -251,95 +259,107 @@ class SemanticCacheService:
             return None
 
         try:
-            # Tạo vector từ query
-            query_vector = self._embed(query)
-
-            # ── Build compound filter expression ─────────────────
-            has_vehicle = bool(vehicle_type)
-            has_violation = bool(violation_type)
-            filter_expr = None
-            if has_vehicle:
-                vehicle_filter = Tag("vehicle_type") == self._normalize_tag(vehicle_type)
-                filter_expr = vehicle_filter
-            if has_violation:
-                violation_filter = Tag("violation_type") == self._normalize_tag(violation_type)
-                filter_expr = (filter_expr & violation_filter) if filter_expr else violation_filter
-
-            # Vector query
-            vq = VectorQuery(
-                vector=query_vector,
-                vector_field_name="query_vector",
-                return_fields=[
-                    "user_query", "response", "metadata_json",
-                    "vehicle_type", "violation_type", "hit_count",
-                    "created_at",
-                ],
-                num_results=1,
-                filter_expression=filter_expr,
+            return await self._run_blocking(
+                self._check_sync,
+                query,
+                vehicle_type,
+                violation_type,
             )
-
-            results = self._index.query(vq)
-
-            if not results:
-                self._misses += 1
-                logging.info(f"[CACHE] MISS — không tìm thấy kết quả cho: '{query[:60]}'")
-                return None
-
-            # Kiểm tra distance (strict: 0.05 = similarity ≥ 0.95)
-            top_result = results[0]
-            distance = float(top_result.get("vector_distance", 999))
-
-            if distance > self.DISTANCE_THRESHOLD:
-                self._misses += 1
-                logging.info(
-                    f"[CACHE] MISS — distance={distance:.4f} > threshold={self.DISTANCE_THRESHOLD} "
-                    f"(similarity={1 - distance:.4f} < 0.95) cho: '{query[:60]}'"
-                )
-                return None
-
-            # Cache HIT!
-            self._hits += 1
-
-            # Decode response (bytes → str)
-            response_raw = top_result.get("response", b"")
-            response = response_raw.decode("utf-8") if isinstance(response_raw, bytes) else str(response_raw)
-
-            metadata_raw = top_result.get("metadata_json", b"{}")
-            metadata_str = metadata_raw.decode("utf-8") if isinstance(metadata_raw, bytes) else str(metadata_raw)
-            metadata = json.loads(metadata_str) if metadata_str else {}
-
-            cached_query_raw = top_result.get("user_query", b"")
-            cached_query = cached_query_raw.decode("utf-8") if isinstance(cached_query_raw, bytes) else str(cached_query_raw)
-
-            # Cập nhật hit_count
-            key = top_result.get("id", "")
-            if key:
-                try:
-                    current_hits = int(top_result.get("hit_count", 0) or 0)
-                    self._redis_client.hset(key, "hit_count", current_hits + 1)
-                    # Refresh TTL
-                    if self._ttl:
-                        self._redis_client.expire(key, self._ttl)
-                except Exception:
-                    pass  # Non-critical
-
-            logging.info(
-                f"[CACHE] HIT ✅ — distance={distance:.4f} (similarity={1 - distance:.4f}), "
-                f"cached_query='{cached_query[:60]}', "
-                f"current_query='{query[:60]}'"
-            )
-
-            return {
-                "response": response,
-                "metadata": metadata,
-                "distance": distance,
-                "cached_query": cached_query,
-            }
-
         except Exception as e:
             logging.warning(f"[CACHE] Lỗi khi check cache: {e}")
             self._misses += 1
             return None
+
+    def _check_sync(
+        self,
+        query: str,
+        vehicle_type: str = "",
+        violation_type: str = "",
+    ) -> Optional[dict]:
+        # Tạo vector từ query
+        query_vector = self._embed(query)
+
+        # ── Build compound filter expression ─────────────────
+        has_vehicle = bool(vehicle_type)
+        has_violation = bool(violation_type)
+        filter_expr = None
+        if has_vehicle:
+            vehicle_filter = Tag("vehicle_type") == self._normalize_tag(vehicle_type)
+            filter_expr = vehicle_filter
+        if has_violation:
+            violation_filter = Tag("violation_type") == self._normalize_tag(violation_type)
+            filter_expr = (filter_expr & violation_filter) if filter_expr else violation_filter
+
+        # Vector query
+        vq = VectorQuery(
+            vector=query_vector,
+            vector_field_name="query_vector",
+            return_fields=[
+                "user_query", "response", "metadata_json",
+                "vehicle_type", "violation_type", "hit_count",
+                "created_at",
+            ],
+            num_results=1,
+            filter_expression=filter_expr,
+        )
+
+        results = self._index.query(vq)
+
+        if not results:
+            self._misses += 1
+            logging.info(f"[CACHE] MISS — không tìm thấy kết quả cho: '{query[:60]}'")
+            return None
+
+        # Kiểm tra distance (strict: 0.05 = similarity ≥ 0.95)
+        top_result = results[0]
+        distance = float(top_result.get("vector_distance", 999))
+
+        if distance > self.DISTANCE_THRESHOLD:
+            self._misses += 1
+            logging.info(
+                f"[CACHE] MISS — distance={distance:.4f} > threshold={self.DISTANCE_THRESHOLD} "
+                f"(similarity={1 - distance:.4f} < 0.95) cho: '{query[:60]}'"
+            )
+            return None
+
+        # Cache HIT!
+        self._hits += 1
+
+        # Decode response (bytes → str)
+        response_raw = top_result.get("response", b"")
+        response = response_raw.decode("utf-8") if isinstance(response_raw, bytes) else str(response_raw)
+
+        metadata_raw = top_result.get("metadata_json", b"{}")
+        metadata_str = metadata_raw.decode("utf-8") if isinstance(metadata_raw, bytes) else str(metadata_raw)
+        metadata = json.loads(metadata_str) if metadata_str else {}
+
+        cached_query_raw = top_result.get("user_query", b"")
+        cached_query = cached_query_raw.decode("utf-8") if isinstance(cached_query_raw, bytes) else str(cached_query_raw)
+
+        # Cập nhật hit_count
+        key = top_result.get("id", "")
+        if key:
+            try:
+                current_hits = int(top_result.get("hit_count", 0) or 0)
+                self._redis_client.hset(key, "hit_count", current_hits + 1)
+                # Refresh TTL
+                if self._ttl:
+                    self._redis_client.expire(key, self._ttl)
+            except Exception:
+                pass  # Non-critical
+
+        logging.info(
+            f"[CACHE] HIT ✅ — distance={distance:.4f} (similarity={1 - distance:.4f}), "
+            f"cached_query='{cached_query[:60]}', "
+            f"current_query='{query[:60]}'"
+        )
+
+        return {
+            "response": response,
+            "metadata": metadata,
+            "distance": distance,
+            "cached_query": cached_query,
+        }
 
     # ------------------------------------------------------------------
     # Cache Store
@@ -380,47 +400,60 @@ class SemanticCacheService:
         try:
             # Evict nếu vượt MAX_ENTRIES trước khi store
             await self._evict_if_needed()
-
-            # Tạo vector
-            query_vector = self._embed(query)
-
-            # Chuẩn bị data
-            vehicle_type = self._normalize_tag(entities.get("vehicle_type", "") or "")
-            violation_type = self._normalize_tag(entities.get("violation", "") or "")
-
-            data = {
-                "user_query": query,
-                "response": response,
-                "vehicle_type": vehicle_type or "unknown",
-                "violation_type": violation_type or "unknown",
-                "law_tags": "nd_168_2024",
-                "created_at": int(time.time()),
-                "hit_count": 0,
-                "metadata_json": json.dumps(metadata, ensure_ascii=False),
-                "query_vector": np.array(query_vector, dtype=np.float32).tobytes(),
-            }
-
-            # Load vào index
-            keys = self._index.load([data], id_field=None)
-
-            # Set TTL fallback (safety net, LFU sẽ evict trước TTL trong hầu hết cases)
-            if self._ttl and keys:
-                for key in keys:
-                    try:
-                        self._redis_client.expire(key, self._ttl)
-                    except Exception:
-                        pass
-
-            logging.info(
-                f"[CACHE] STORED — query='{query[:60]}', "
-                f"vehicle={vehicle_type}, violation={violation_type}, "
-                f"response_len={len(response)}"
+            return await self._run_blocking(
+                self._store_sync,
+                query,
+                response,
+                entities,
+                metadata,
             )
-            return keys[0] if keys else None
-
         except Exception as e:
             logging.warning(f"[CACHE] Lỗi khi store cache: {e}")
             return None
+
+    def _store_sync(
+        self,
+        query: str,
+        response: str,
+        entities: dict,
+        metadata: dict,
+    ) -> Optional[str]:
+        # Tạo vector
+        query_vector = self._embed(query)
+
+        # Chuẩn bị data
+        vehicle_type = self._normalize_tag(entities.get("vehicle_type", "") or "")
+        violation_type = self._normalize_tag(entities.get("violation", "") or "")
+
+        data = {
+            "user_query": query,
+            "response": response,
+            "vehicle_type": vehicle_type or "unknown",
+            "violation_type": violation_type or "unknown",
+            "law_tags": "nd_168_2024",
+            "created_at": int(time.time()),
+            "hit_count": 0,
+            "metadata_json": json.dumps(metadata, ensure_ascii=False),
+            "query_vector": np.array(query_vector, dtype=np.float32).tobytes(),
+        }
+
+        # Load vào index
+        keys = self._index.load([data], id_field=None)
+
+        # Set TTL fallback (safety net, LFU sẽ evict trước TTL trong hầu hết cases)
+        if self._ttl and keys:
+            for key in keys:
+                try:
+                    self._redis_client.expire(key, self._ttl)
+                except Exception:
+                    pass
+
+        logging.info(
+            f"[CACHE] STORED — query='{query[:60]}', "
+            f"vehicle={vehicle_type}, violation={violation_type}, "
+            f"response_len={len(response)}"
+        )
+        return keys[0] if keys else None
 
     # ------------------------------------------------------------------
     # LFU + Time Decay — Eviction Logic
@@ -463,18 +496,21 @@ class SemanticCacheService:
             return 0
 
         try:
-            info = self._index.info()
-            num_docs = int(info.get("num_docs", 0))
-
-            if num_docs < self.MAX_ENTRIES:
-                return 0
-
-            return await self._evict_lowest_scored(
-                count=int(num_docs * self.EVICT_BATCH_PERCENT)
-            )
+            return await self._run_blocking(self._evict_if_needed_sync)
         except Exception as e:
             logging.warning(f"[CACHE] Lỗi kiểm tra eviction: {e}")
             return 0
+
+    def _evict_if_needed_sync(self) -> int:
+        info = self._index.info()
+        num_docs = int(info.get("num_docs", 0))
+
+        if num_docs < self.MAX_ENTRIES:
+            return 0
+
+        return self._evict_lowest_scored_sync(
+            count=int(num_docs * self.EVICT_BATCH_PERCENT)
+        )
 
     async def _evict_lowest_scored(self, count: int = 100) -> int:
         """
@@ -487,53 +523,55 @@ class SemanticCacheService:
             return 0
 
         try:
-            now = int(time.time())
-            scored_keys: list[tuple[float, str]] = []  # (score, key)
-
-            # Scan all cache keys
-            cursor = 0
-            while True:
-                cursor, keys = self._redis_client.scan(
-                    cursor=cursor, match="cache:*", count=200
-                )
-                for key in keys:
-                    try:
-                        fields = self._redis_client.hmget(key, "hit_count", "created_at")
-                        hit_count = int(fields[0] or 0) if fields[0] else 0
-                        created_at = int(fields[1] or 0) if fields[1] else 0
-                        score = self._compute_score(hit_count, created_at, now)
-                        key_str = key.decode("utf-8") if isinstance(key, bytes) else str(key)
-                        scored_keys.append((score, key_str))
-                    except Exception:
-                        continue
-                if cursor == 0:
-                    break
-
-            if not scored_keys:
-                return 0
-
-            # Sort ascending by score, evict lowest
-            scored_keys.sort(key=lambda x: x[0])
-            to_evict = scored_keys[:count]
-
-            evicted = 0
-            for score, key in to_evict:
-                try:
-                    self._redis_client.delete(key)
-                    evicted += 1
-                except Exception:
-                    continue
-
-            self._evictions += evicted
-            logging.info(
-                f"[CACHE] LFU EVICT — evicted={evicted}/{count}, "
-                f"min_score={to_evict[0][0]:.4f}, max_score={to_evict[-1][0]:.4f}"
-            )
-            return evicted
-
+            return await self._run_blocking(self._evict_lowest_scored_sync, count)
         except Exception as e:
             logging.warning(f"[CACHE] Lỗi khi evict: {e}")
             return 0
+
+    def _evict_lowest_scored_sync(self, count: int = 100) -> int:
+        now = int(time.time())
+        scored_keys: list[tuple[float, str]] = []  # (score, key)
+
+        # Scan all cache keys
+        cursor = 0
+        while True:
+            cursor, keys = self._redis_client.scan(
+                cursor=cursor, match="cache:*", count=200
+            )
+            for key in keys:
+                try:
+                    fields = self._redis_client.hmget(key, "hit_count", "created_at")
+                    hit_count = int(fields[0] or 0) if fields[0] else 0
+                    created_at = int(fields[1] or 0) if fields[1] else 0
+                    score = self._compute_score(hit_count, created_at, now)
+                    key_str = key.decode("utf-8") if isinstance(key, bytes) else str(key)
+                    scored_keys.append((score, key_str))
+                except Exception:
+                    continue
+            if cursor == 0:
+                break
+
+        if not scored_keys:
+            return 0
+
+        # Sort ascending by score, evict lowest
+        scored_keys.sort(key=lambda x: x[0])
+        to_evict = scored_keys[:count]
+
+        evicted = 0
+        for score, key in to_evict:
+            try:
+                self._redis_client.delete(key)
+                evicted += 1
+            except Exception:
+                continue
+
+        self._evictions += evicted
+        logging.info(
+            f"[CACHE] LFU EVICT — evicted={evicted}/{count}, "
+            f"min_score={to_evict[0][0]:.4f}, max_score={to_evict[-1][0]:.4f}"
+        )
+        return evicted
 
     async def cleanup(self) -> int:
         """
@@ -546,38 +584,40 @@ class SemanticCacheService:
             return 0
 
         try:
-            now = int(time.time())
-            evicted = 0
-
-            cursor = 0
-            while True:
-                cursor, keys = self._redis_client.scan(
-                    cursor=cursor, match="cache:*", count=200
-                )
-                for key in keys:
-                    try:
-                        fields = self._redis_client.hmget(key, "hit_count", "created_at")
-                        hit_count = int(fields[0] or 0) if fields[0] else 0
-                        created_at = int(fields[1] or 0) if fields[1] else 0
-                        score = self._compute_score(hit_count, created_at, now)
-                        if score < self.MIN_SCORE_THRESHOLD:
-                            self._redis_client.delete(key)
-                            evicted += 1
-                    except Exception:
-                        continue
-                if cursor == 0:
-                    break
-
-            self._evictions += evicted
-            if evicted > 0:
-                logging.info(
-                    f"[CACHE] CLEANUP — removed {evicted} entries with score < {self.MIN_SCORE_THRESHOLD}"
-                )
-            return evicted
-
+            return await self._run_blocking(self._cleanup_sync)
         except Exception as e:
             logging.warning(f"[CACHE] Lỗi khi cleanup: {e}")
             return 0
+
+    def _cleanup_sync(self) -> int:
+        now = int(time.time())
+        evicted = 0
+
+        cursor = 0
+        while True:
+            cursor, keys = self._redis_client.scan(
+                cursor=cursor, match="cache:*", count=200
+            )
+            for key in keys:
+                try:
+                    fields = self._redis_client.hmget(key, "hit_count", "created_at")
+                    hit_count = int(fields[0] or 0) if fields[0] else 0
+                    created_at = int(fields[1] or 0) if fields[1] else 0
+                    score = self._compute_score(hit_count, created_at, now)
+                    if score < self.MIN_SCORE_THRESHOLD:
+                        self._redis_client.delete(key)
+                        evicted += 1
+                except Exception:
+                    continue
+            if cursor == 0:
+                break
+
+        self._evictions += evicted
+        if evicted > 0:
+            logging.info(
+                f"[CACHE] CLEANUP — removed {evicted} entries with score < {self.MIN_SCORE_THRESHOLD}"
+            )
+        return evicted
 
     async def _periodic_cleanup(self) -> None:
         """
@@ -607,7 +647,7 @@ class SemanticCacheService:
             return False
 
         try:
-            self._index.clear()
+            await self._run_blocking(self._index.clear)
             self._hits = 0
             self._misses = 0
             self._evictions = 0
@@ -628,37 +668,44 @@ class SemanticCacheService:
             return 0
 
         try:
-            normalized_tag = self._normalize_tag(law_tag)
-            # Dùng RediSearch FT.SEARCH với TAG filter thay vì SCAN
-            filter_expr = Tag("law_tags") == normalized_tag
-            vq = VectorQuery(
-                vector=[0.0] * 768,  # dummy vector, chỉ cần filter
-                vector_field_name="query_vector",
-                return_fields=[],
-                num_results=1000,  # batch size
-                filter_expression=filter_expr,
-            )
-            results = self._index.query(vq)
-
-            count = 0
-            for result in results:
-                key = result.get("id", "")
-                if key:
-                    try:
-                        self._redis_client.delete(key)
-                        count += 1
-                    except Exception:
-                        continue
-
-            logging.info(f"[CACHE] Invalidated {count} entries với tag '{law_tag}' (RediSearch)")
-            return count
+            return await self._run_blocking(self._invalidate_by_tag_sync, law_tag)
         except Exception as e:
             logging.warning(f"[CACHE] Lỗi khi invalidate: {e}")
             return 0
 
+    def _invalidate_by_tag_sync(self, law_tag: str) -> int:
+        normalized_tag = self._normalize_tag(law_tag)
+        # Dùng RediSearch FT.SEARCH với TAG filter thay vì SCAN
+        filter_expr = Tag("law_tags") == normalized_tag
+        vq = VectorQuery(
+            vector=[0.0] * 768,  # dummy vector, chỉ cần filter
+            vector_field_name="query_vector",
+            return_fields=[],
+            num_results=1000,  # batch size
+            filter_expression=filter_expr,
+        )
+        results = self._index.query(vq)
+
+        count = 0
+        for result in results:
+            key = result.get("id", "")
+            if key:
+                try:
+                    self._redis_client.delete(key)
+                    count += 1
+                except Exception:
+                    continue
+
+        logging.info(f"[CACHE] Invalidated {count} entries với tag '{law_tag}' (RediSearch)")
+        return count
+
     # ------------------------------------------------------------------
     # Stats
     # ------------------------------------------------------------------
+
+    async def aget_stats(self) -> dict:
+        """Async-safe cache statistics for FastAPI endpoints."""
+        return await self._run_blocking(self.get_stats)
 
     def get_stats(self) -> dict:
         """Trả về cache statistics bao gồm LFU eviction info."""

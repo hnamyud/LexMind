@@ -92,7 +92,7 @@ async def debug_info(request: Request):
             if svc._embed_model
             else None
         ),
-        "cache_stats": svc._cache.get_stats() if svc._cache else None,
+        "cache_stats": await svc._cache.aget_stats() if svc._cache else None,
     }
 
 
@@ -119,7 +119,7 @@ async def cache_stats(request: Request):
     svc = _get_service(request)
     if not svc._cache:
         return {"connected": False, "message": "Semantic Cache chưa được khởi tạo."}
-    return svc._cache.get_stats()
+    return await svc._cache.aget_stats()
 
 
 @router.delete("/cache/invalidate/{law_tag}", tags=["Cache"], dependencies=[Depends(verify_internal_secret)])

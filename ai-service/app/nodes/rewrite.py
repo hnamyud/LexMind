@@ -231,7 +231,7 @@ async def _node_rewrite(self, state: dict) -> dict:
 
         sub_queries = data.get("sub_queries", [])
         validated_subs = []
-        for sq in sub_queries[:3]:
+        for sq in sub_queries[:5]:
             if isinstance(sq, dict) and sq.get("legal_query"):
                 validated_subs.append({
                     "legal_query": sq["legal_query"],

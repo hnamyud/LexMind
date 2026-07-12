@@ -697,7 +697,7 @@ class GraphRetrievalTool(BaseTool):
     # ------------------------------------------------------------------
     # Nhánh 1: Keyword search (Fulltext Index)
     # ------------------------------------------------------------------
-    async def _search_keyword(self, keyword: str) -> list[dict]:
+    async def _search_keyword(self, keyword: str, top_k: int | None = None) -> list[dict]:
         """
         Tìm kiếm theo từ khóa qua Fulltext Index (Lucene).
 
@@ -713,6 +713,7 @@ class GraphRetrievalTool(BaseTool):
         # Đảm bảo index tồn tại trước khi query
         await self._ensure_fulltext_index()
         escaped_keyword = _escape_lucene(keyword.strip())
+        effective_top_k = top_k or self.top_k
 
         try:
             async with self.driver.session(
@@ -722,7 +723,7 @@ class GraphRetrievalTool(BaseTool):
                 result = await session.run(
                     self._CYPHER_KEYWORD,
                     keyword=escaped_keyword,
-                    top_k=self.top_k,
+                    top_k=effective_top_k,
                 )
                 records = await result.data()
                 logging.info(
@@ -736,10 +737,11 @@ class GraphRetrievalTool(BaseTool):
     # ------------------------------------------------------------------
     # Nhánh 2: Vector search
     # ------------------------------------------------------------------
-    async def _search_vector(self, vector: list) -> list[dict]:
+    async def _search_vector(self, vector: list, top_k: int | None = None) -> list[dict]:
         """Tìm kiếm theo vector embedding (semantic similarity)."""
         if not vector:
             return []
+        effective_top_k = top_k or self.top_k
 
         try:
             async with self.driver.session(
@@ -749,7 +751,7 @@ class GraphRetrievalTool(BaseTool):
                 result = await session.run(
                     self._CYPHER_VECTOR,
                     vector=vector,
-                    top_k=self.top_k,
+                    top_k=effective_top_k,
                 )
                 records = await result.data()
                 logging.info(f"[Vector] Tìm được {len(records)} node")
@@ -761,12 +763,13 @@ class GraphRetrievalTool(BaseTool):
     # ------------------------------------------------------------------
     # Nhánh 3: Graph traversal (entity-driven)
     # ------------------------------------------------------------------
-    async def _search_graph(self, entities: dict) -> list[dict]:
+    async def _search_graph(self, entities: dict, top_k: int | None = None) -> list[dict]:
         """Duyệt đồ thị dựa trên entities đã bóc tách."""
         violation = (entities.get("violation") or "").strip()
         vehicle_type = (entities.get("vehicle_type") or "").strip()
         escaped_violation = _escape_lucene(violation)
         escaped_vehicle_type = _escape_lucene(vehicle_type)
+        effective_top_k = top_k or self.top_k
 
         if not violation:
             return []
@@ -782,7 +785,7 @@ class GraphRetrievalTool(BaseTool):
                 result_main = await session.run(
                     self._CYPHER_GRAPH,
                     violation=escaped_violation,
-                    top_k=self.top_k,
+                    top_k=effective_top_k,
                 )
                 records_main = await result_main.data()
 
@@ -793,7 +796,7 @@ class GraphRetrievalTool(BaseTool):
                         self._CYPHER_GRAPH_SUBJECT,
                         violation=escaped_violation,
                         vehicle_type=escaped_vehicle_type,
-                        top_k=self.top_k,
+                        top_k=effective_top_k,
                     )
                     records_subject = await result_subj.data()
 
@@ -812,7 +815,12 @@ class GraphRetrievalTool(BaseTool):
     # ------------------------------------------------------------------
     # Nhánh 4: Consequence-First Lookup
     # ------------------------------------------------------------------
-    async def _search_consequence_first(self, query: str, entities: dict) -> list[dict]:
+    async def _search_consequence_first(
+        self,
+        query: str,
+        entities: dict,
+        top_k: int | None = None,
+    ) -> list[dict]:
         """
         Nhánh 4: Consequence-first lookup.
 
@@ -837,6 +845,7 @@ class GraphRetrievalTool(BaseTool):
 
         consequence_keyword = _extract_consequence_keyword(query)
         escaped_consequence_keyword = _escape_lucene(consequence_keyword)
+        effective_top_k = top_k or self.top_k
 
         logging.info(
             f"[ConsequenceFirst] Detected consequence query. "
@@ -851,7 +860,7 @@ class GraphRetrievalTool(BaseTool):
                 result = await session.run(
                     self._CYPHER_CONSEQUENCE_FIRST,
                     consequence_keyword=escaped_consequence_keyword,
-                    top_k=self.top_k,
+                    top_k=effective_top_k,
                 )
                 records = await result.data()
 
@@ -867,7 +876,12 @@ class GraphRetrievalTool(BaseTool):
     # ------------------------------------------------------------------
     # Nhánh 5: Provision Lookup (cho provision_lookup mode)
     # ------------------------------------------------------------------
-    async def _search_provision(self, query: str, entities: dict) -> list[dict]:
+    async def _search_provision(
+        self,
+        query: str,
+        entities: dict,
+        top_k: int | None = None,
+    ) -> list[dict]:
         """
         Nhánh 5: Provision lookup cho câu hỏi định nghĩa/quy định.
 
@@ -894,6 +908,7 @@ class GraphRetrievalTool(BaseTool):
         article_node_id = entities.get("article_node_id")
         legal_concept = entities.get("legal_concept") or query
         document_ref = entities.get("document_ref")
+        effective_top_k = top_k or self.top_k
 
         results = []
 
@@ -920,7 +935,7 @@ class GraphRetrievalTool(BaseTool):
                 result = await session.run(
                     self._CYPHER_PROVISION_FULLTEXT,
                     keyword=escaped_keyword,
-                    top_k=self.top_k,
+                    top_k=effective_top_k,
                 )
                 records = await result.data()
 
@@ -1303,6 +1318,8 @@ class GraphRetrievalTool(BaseTool):
         self,
         query: str,
         entities: dict = None,
+        retrieval_top_k: int | None = None,
+        max_results: int | None = None,
         run_manager: Optional[AsyncCallbackManagerForToolRun] = None,
     ) -> str:
         """
@@ -1334,6 +1351,8 @@ class GraphRetrievalTool(BaseTool):
 
         entities = entities or {}
         query_mode = entities.get("query_mode", "penalty_lookup")
+        effective_top_k = retrieval_top_k or self.top_k
+        effective_max_results = max_results or (effective_top_k * 2)
 
         try:
             # ── Bước 1: Tạo embedding (CPU-bound → executor) ─────────────
@@ -1364,13 +1383,19 @@ class GraphRetrievalTool(BaseTool):
                 )
 
                 keyword_task = search_with_timeout(
-                    self._search_keyword(query), self.keyword_timeout, "Keyword"
+                    self._search_keyword(query, top_k=effective_top_k),
+                    self.keyword_timeout,
+                    "Keyword",
                 )
                 vector_task = search_with_timeout(
-                    self._search_vector(vector), self.vector_timeout, "Vector"
+                    self._search_vector(vector, top_k=effective_top_k),
+                    self.vector_timeout,
+                    "Vector",
                 )
                 provision_task = search_with_timeout(
-                    self._search_provision(query, entities), self.graph_timeout, "Provision"
+                    self._search_provision(query, entities, top_k=effective_top_k),
+                    self.graph_timeout,
+                    "Provision",
                 )
 
                 keyword_results, vector_results, provision_results = (
@@ -1408,16 +1433,26 @@ class GraphRetrievalTool(BaseTool):
                 )
 
                 keyword_task = search_with_timeout(
-                    self._search_keyword(query), self.keyword_timeout, "Keyword"
+                    self._search_keyword(query, top_k=effective_top_k),
+                    self.keyword_timeout,
+                    "Keyword",
                 )
                 vector_task = search_with_timeout(
-                    self._search_vector(vector), self.vector_timeout, "Vector"
+                    self._search_vector(vector, top_k=effective_top_k),
+                    self.vector_timeout,
+                    "Vector",
                 )
                 graph_task = search_with_timeout(
-                    self._search_graph(entities), self.graph_timeout, "Graph"
+                    self._search_graph(entities, top_k=effective_top_k),
+                    self.graph_timeout,
+                    "Graph",
                 )
                 consequence_task = search_with_timeout(
-                    self._search_consequence_first(query, entities),
+                    self._search_consequence_first(
+                        query,
+                        entities,
+                        top_k=effective_top_k,
+                    ),
                     self.consequence_timeout,
                     "ConsequenceFirst",
                 )
@@ -1473,8 +1508,7 @@ class GraphRetrievalTool(BaseTool):
                 return low_confidence_msg
 
             # ── Bước 4: Format context ───────────────────────────────────
-            max_results = self.top_k * 2
-            context = self._format_context(merged[:max_results])
+            context = self._format_context(merged[:effective_max_results])
 
             self._write_query_log(query, entities, context)
 
