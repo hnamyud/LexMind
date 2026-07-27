@@ -1,7 +1,4 @@
 services:
-  # --------------------------------------------------------------------------
-  # Redis (local) — session cache / queue
-  # --------------------------------------------------------------------------
   redis:
     image: redis/redis-stack-server:latest
     container_name: chatbot-law-redis
@@ -17,13 +14,12 @@ services:
       timeout: 5s
       retries: 10
 
-  # --------------------------------------------------------------------------
-  # AI Service — PostgreSQL Supabase cloud (checkpoint), Neo4j AuraDB cloud
-  # --------------------------------------------------------------------------
   ai-service:
     build:
       context: ./ai-service
       dockerfile: Dockerfile
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     container_name: chatbot-law-ai-service
     restart: unless-stopped
     mem_limit: 3g
@@ -32,10 +28,9 @@ services:
     environment:
       FASTAPI_URI: 0.0.0.0
       FASTAPI_PORT: 8001
-      REDIS_URL: "redis://redis:6379"
+      REDIS_URL: redis://redis:6379
       EMBED_MODEL_ID: ${EMBED_MODEL_ID:-huyydangg/DEk21_hcmute_embedding}
       EMBED_ONNX_PROVIDERS: ${EMBED_ONNX_PROVIDERS:-CPUExecutionProvider}
-      # DATABASE_URL, NEO4J_* → từ .env (cloud)
     volumes:
       - hf_cache:/data/huggingface
     ports:
@@ -50,35 +45,61 @@ services:
       redis:
         condition: service_healthy
 
-  # --------------------------------------------------------------------------
-  # Backend Core — PostgreSQL Supabase cloud (DATABASE_URL từ .env)
-  # --------------------------------------------------------------------------
-  backend-core:
+  core-api:
     build:
-      context: ./backend-core
+      context: ./core-api
       dockerfile: Dockerfile
-    container_name: chatbot-law-backend-core
+    image: chatbot-law-core-api:local
+    container_name: chatbot-law-core-api
     restart: unless-stopped
     mem_limit: 512m
     env_file:
       - ./.env
     environment:
-      NODE_ENV: production
-      PORT: 8080
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      REDIS_URL: "redis://redis:6379"
-      FASTAPI_URL: ai-service
-      FASTAPI_PORT: 8001
-      LEXMIND_AI_SERVICE_URL: http://ai-service:8001
-      # DATABASE_URL → từ .env (Supabase Pooler)
+      APP_ENV: production
+      CORE_API_PORT: 8080
+      REDIS_URL: redis://redis:6379
+      AI_SERVICE_URL: http://ai-service:8001
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
     depends_on:
       redis:
         condition: service_healthy
       ai-service:
         condition: service_healthy
+      core-migrate:
+        condition: service_completed_successfully
+
+  core-migrate:
+    image: chatbot-law-core-api:local
+    container_name: chatbot-law-core-migrate
+    restart: "no"
+    env_file:
+      - ./.env
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+
+  core-mail-worker:
+    image: chatbot-law-core-api:local
+    container_name: chatbot-law-core-mail-worker
+    restart: unless-stopped
+    mem_limit: 256m
+    env_file:
+      - ./.env
+    environment:
+      APP_ENV: production
+      REDIS_URL: redis://redis:6379
+      AI_SERVICE_URL: http://ai-service:8001
+    command: ["python", "-m", "arq", "app.workers.mail.WorkerSettings"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      core-migrate:
+        condition: service_completed_successfully
 
 volumes:
   redis_data:

@@ -24,6 +24,7 @@ from transformers import AutoTokenizer
 
 
 DEFAULT_ONNX_MODEL_FILE = "onnx/model.onnx"
+DEFAULT_ONNX_MODEL_REVISION = "501df2abd66bfecf9f294c4d17741b0d9f3ebb7e"
 DEFAULT_HF_TOKENIZER_ALLOW_PATTERNS = [
     "config.json",
     "tokenizer.json",
@@ -34,6 +35,7 @@ DEFAULT_HF_TOKENIZER_ALLOW_PATTERNS = [
     "bpe.codes",
     "sentence_bert_config.json",
     "1_Pooling/config.json",
+    DEFAULT_ONNX_MODEL_FILE,
 ]
 
 
@@ -45,6 +47,7 @@ class OnnxEmbeddingModel:
         model_id: str,
         *,
         model_file: str = DEFAULT_ONNX_MODEL_FILE,
+        revision: str = DEFAULT_ONNX_MODEL_REVISION,
         providers: list[str] | None = None,
         batch_size: int = 32,
         max_length: int | None = None,
@@ -52,12 +55,14 @@ class OnnxEmbeddingModel:
     ) -> None:
         self.model_id = model_id
         self.model_file = model_file
+        self.revision = revision
         self.batch_size = batch_size
         self.normalize_embeddings = normalize_embeddings
 
         self.model_dir = Path(
             snapshot_download(
                 repo_id=model_id,
+                revision=revision,
                 allow_patterns=DEFAULT_HF_TOKENIZER_ALLOW_PATTERNS,
             )
         )
@@ -181,6 +186,7 @@ class OnnxEmbeddingModel:
             hf_hub_download(
                 repo_id=self.model_id,
                 filename=self.model_file,
+                revision=self.revision,
             )
         )
 
@@ -212,6 +218,7 @@ def load_embed_model(service) -> None:
         )
         service._embed_model = OnnxEmbeddingModel(
             service._embed_model_id,
+            revision=getattr(service, "_embed_model_revision", DEFAULT_ONNX_MODEL_REVISION),
             providers=providers or None,
             batch_size=getattr(service, "_embed_batch_size", 32),
             max_length=getattr(service, "_embed_max_length", None),

@@ -1,1 +1,0 @@
-import { PrismaClient } from "@prisma/client"; const prisma = new PrismaClient(); async function main() { await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "ai_usage_logs" CASCADE;`); console.log("Dropped table"); } main().catch(console.error).finally(()=>prisma.$disconnect());
