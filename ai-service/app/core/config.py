@@ -26,6 +26,12 @@ class Settings:
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
     EMBED_MODEL_ID: str = os.getenv("EMBED_MODEL_ID", "huyydangg/DEk21_hcmute_embedding")
+    # Revision 501d… is the repository revision that contains onnx/model.onnx.
+    # Keep this overridable so a future verified ONNX revision can be deployed
+    # without changing code.
+    EMBED_MODEL_REVISION: str = os.getenv(
+        "EMBED_MODEL_REVISION", "501df2abd66bfecf9f294c4d17741b0d9f3ebb7e"
+    )
     EMBED_ONNX_PROVIDERS: str = os.getenv("EMBED_ONNX_PROVIDERS", "CPUExecutionProvider")
     EMBED_BATCH_SIZE: int = int(os.getenv("EMBED_BATCH_SIZE", "32"))
     EMBED_MAX_LENGTH: int | None = int(os.getenv("EMBED_MAX_LENGTH")) if os.getenv("EMBED_MAX_LENGTH") else None

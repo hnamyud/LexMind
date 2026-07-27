@@ -63,6 +63,7 @@ class RAGService:
         self._api_key_serper = settings.SERPER_API_KEY
         self._api_key_firecrawl = settings.FIRECRAWL_API_KEY
         self._embed_model_id = settings.EMBED_MODEL_ID
+        self._embed_model_revision = settings.EMBED_MODEL_REVISION
         self._embed_onnx_providers = settings.EMBED_ONNX_PROVIDERS
         self._embed_batch_size = settings.EMBED_BATCH_SIZE
         self._embed_max_length = settings.EMBED_MAX_LENGTH

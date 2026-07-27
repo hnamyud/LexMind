@@ -1,0 +1,1 @@
+"""FastAPI core API."""

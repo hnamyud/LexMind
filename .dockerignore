@@ -22,13 +22,6 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Node artifacts
-node_modules/
-dist/
-build/
-coverage/
-.nyc_output/
-
 # Misc
 tmp/
 *.tmp

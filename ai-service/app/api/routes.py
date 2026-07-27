@@ -349,7 +349,7 @@ async def generate_conversation_title(request: Request, body: GenerateTitleReque
     """
     Dùng LLM router (model nhẹ) để sinh tiêu đề ngắn gọn cho conversation
     từ cặp user_message + bot_message đầu tiên.
-    Được gọi bất đồng bộ từ NestJS — không block luồng chat của user.
+    Được gọi bất đồng bộ từ Core API — không block luồng chat của user.
     """
     svc = _get_service(request)
     if not svc._llm_router:

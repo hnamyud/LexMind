@@ -1,25 +1,18 @@
 # compiled output
 dist/
-node_modules/
 build/
-package-lock.json
+node_modules/
 
 
 # Logs
 logs
 *.log
-npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
 
 # OS
 .DS_Store
 
 # Tests
 /coverage
-/.nyc_output
 
 # IDEs and editors
 /.idea
@@ -54,10 +47,6 @@ pids
 *.seed
 *.pid.lock
 
-# Diagnostic reports (https://nodejs.org/api/report.html)
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-
-/generated/prisma
 .bench_baseline/
 
 # Python
@@ -66,6 +55,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+*.egg-info/
 
 .continue/
 
@@ -73,7 +63,6 @@ venv/
 /ai-service/test
 /ai-service/tests
 /ai-service/scripts
-/backend-core/docs
 /task
 .pytest_cache/
 .vscode/
